@@ -18,7 +18,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@aws-sdk/client-ecs": "^3.686.0",
+    "@aws-sdk/client-ecs": "^3.687.0",
     "@dcl/schemas": "^15.1.0",
     "@well-known-components/env-config-provider": "^1.1.1",
     "@well-known-components/http-server": "^1.1.6",
