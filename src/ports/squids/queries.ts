@@ -1,6 +1,10 @@
 import SQL, { SQLStatement } from "sql-template-strings";
 
-export const getPromoteQuery = (serviceName: string): SQLStatement => {
+export const getPromoteQuery = (
+  serviceName: string,
+  schemaName: string,
+  project: string
+): SQLStatement => {
   return SQL`
       DO $$
       DECLARE
@@ -16,19 +20,19 @@ export const getPromoteQuery = (serviceName: string): SQLStatement => {
         -- Fetch the old schema name from the squids table
         SELECT schema INTO old_schema_name 
         FROM squids 
-        WHERE name = 'marketplace';
+        WHERE name = '${project}';
         
         -- Rename the old schema
-        EXECUTE format('ALTER SCHEMA squid_marketplace RENAME TO %I', old_schema_name);
+        EXECUTE format('ALTER SCHEMA ${schemaName} RENAME TO %I', old_schema_name);
         
         -- Rename the new schema to the desired name
-        EXECUTE format('ALTER SCHEMA %I RENAME TO squid_marketplace', new_schema_name);
+        EXECUTE format('ALTER SCHEMA %I RENAME TO ${schemaName}', new_schema_name);
         
         -- Update the search path for the user
-        EXECUTE format('ALTER USER %I SET search_path TO squid_marketplace', db_user);
+        EXECUTE format('ALTER USER %I SET search_path TO ${schemaName}', db_user);
         
         -- Update the schema in the squids table
-        UPDATE squids SET schema = new_schema_name WHERE name = 'marketplace';
+        UPDATE squids SET schema = new_schema_name WHERE name = '${project}';
         
       -- Commit the transaction
       COMMIT;

@@ -29,7 +29,7 @@ jobs:
         id: deploy
         uses: decentraland/dcl-deploy-action@main
         with:
-          dockerImage: "quay.io/decentraland/squid-management-server-:${{ inputs.tag }}"
+          dockerImage: "quay.io/decentraland/squid-management-server:${{ inputs.tag }}"
           serviceName: "squid-management-server"
           env: ${{ inputs.deployment-environment }}
           token: ${{ secrets.GITHUB_TOKEN }}

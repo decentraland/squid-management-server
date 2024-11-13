@@ -13,7 +13,7 @@ export async function main(
   };
 
   // wire the HTTP router (make it automatic? TBD)
-  const router = await setupRouter(globalContext);
+  const router = await setupRouter();
   // register routes middleware
   components.server.use(router.middleware());
   // register not implemented/method not allowed/cors responses middleware

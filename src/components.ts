@@ -40,7 +40,11 @@ export async function initComponents(): Promise<AppComponents> {
       dbPrefix: "DAPPS",
     }
   );
-  const squids = await createSubsquidComponent({ fetch, dappsDatabase });
+  const squids = await createSubsquidComponent({
+    fetch,
+    dappsDatabase,
+    config,
+  });
 
   return {
     config,

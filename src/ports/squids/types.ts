@@ -20,6 +20,6 @@ export type Squid = {
 
 export type ISquidComponent = {
   list(): Promise<Squid[]>;
-  stop(serviceName: string): Promise<void>;
+  downgrade(serviceName: string): Promise<void>;
   promote(serviceName: string): Promise<void>;
 };

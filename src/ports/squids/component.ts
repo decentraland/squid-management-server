@@ -8,29 +8,35 @@ import {
   UpdateServiceCommand,
   DescribeServicesCommand,
 } from "@aws-sdk/client-ecs";
-import { IFetchComponent } from "@well-known-components/interfaces";
+import {
+  IConfigComponent,
+  IFetchComponent,
+} from "@well-known-components/interfaces";
 import { IPgComponent } from "@well-known-components/pg-component";
 import { getPromoteQuery } from "./queries";
 import { getMetricValue, getSquidsNetworksMapping } from "./utilts";
 import { Network } from "@dcl/schemas";
 
 const AWS_REGION = "us-east-1";
-const CLUSTER_NAME = process.env.CLUSTER_NAME || "dev-main";
 
-export function createSubsquidComponent({
+export async function createSubsquidComponent({
   fetch,
   dappsDatabase,
+  config,
 }: {
   fetch: IFetchComponent;
   dappsDatabase: IPgComponent;
-}): ISquidComponent {
+  config: IConfigComponent;
+}): Promise<ISquidComponent> {
+  const cluster: string =
+    (await config.getString("CLUSTER_NAME")) || "dev-main";
   const client = new ECSClient({ region: AWS_REGION });
 
   async function list(): Promise<Squid[]> {
     try {
       // Step 1: List all services
       const input: ListServicesRequest = {
-        cluster: CLUSTER_NAME,
+        cluster,
         maxResults: 100,
       };
       const listServicesCommand = new ListServicesCommand(input);
@@ -45,7 +51,7 @@ export function createSubsquidComponent({
       const results: Squid[] = [];
 
       const describeServicesCommand = new DescribeServicesCommand({
-        cluster: CLUSTER_NAME,
+        cluster,
         services: squidServices,
       });
 
@@ -56,7 +62,7 @@ export function createSubsquidComponent({
       for (const squidService of describeServicesResponse.services || []) {
         const serviceName = squidService.serviceName;
         const listTasksCommand = new ListTasksCommand({
-          cluster: CLUSTER_NAME,
+          cluster,
           serviceName,
         });
         const taskResponse = await client.send(listTasksCommand);
@@ -65,7 +71,7 @@ export function createSubsquidComponent({
         if (taskArns.length === 0) continue;
 
         const describeTasksCommand = new DescribeTasksCommand({
-          cluster: CLUSTER_NAME,
+          cluster,
           tasks: taskArns,
         });
         const describeResponse = await client.send(describeTasksCommand);
@@ -144,10 +150,10 @@ export function createSubsquidComponent({
     }
   }
 
-  async function stop(serviceName: string): Promise<void> {
+  async function downgrade(serviceName: string): Promise<void> {
     try {
       const updateServiceCommand = new UpdateServiceCommand({
-        cluster: CLUSTER_NAME,
+        cluster,
         service: serviceName,
         desiredCount: 0,
       });
@@ -158,7 +164,13 @@ export function createSubsquidComponent({
 
   async function promote(serviceName: string): Promise<void> {
     try {
-      const promoteQuery = getPromoteQuery(serviceName);
+      const projectName = serviceName.split("-")[0]; // e.g: service name is marketplace-squid-server-a-blue-92e812a, project is marketplace
+      const schemaName = `squid_${projectName}`; // e.g: squid_marketplace
+      const promoteQuery = getPromoteQuery(
+        serviceName,
+        schemaName,
+        projectName
+      );
 
       const result = await dappsDatabase.query(promoteQuery);
     } catch (error) {}
@@ -167,6 +179,6 @@ export function createSubsquidComponent({
   return {
     list,
     promote,
-    stop,
+    downgrade,
   };
 }

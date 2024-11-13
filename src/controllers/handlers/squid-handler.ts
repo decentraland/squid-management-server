@@ -8,7 +8,6 @@ export async function squidsHandler(
   >
 ) {
   const {
-    url,
     components: { squids },
   } = context;
 
