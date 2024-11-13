@@ -28,8 +28,7 @@ export async function createSubsquidComponent({
   dappsDatabase: IPgComponent;
   config: IConfigComponent;
 }): Promise<ISquidComponent> {
-  const cluster: string =
-    (await config.getString("CLUSTER_NAME")) || "dev-main";
+  const cluster = await config.requireString("CLUSTER_NAME");
   const client = new ECSClient({ region: AWS_REGION });
 
   async function list(): Promise<Squid[]> {
