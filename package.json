@@ -1,0 +1,36 @@
+{
+  "name": "squid-management-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --trace-warnings --abort-on-uncaught-exception --unhandled-rejections=strict dist/index.js",
+    "start:watch": "nodemon src/index.ts",
+    "check:code": "eslint -c .eslintrc.json {src,test}",
+    "check:prettier": "prettier -c '{src,test}/**/*.{js,ts,json,yml,md}'",
+    "fix:code": "npm run check:code -- --fix",
+    "fix:prettier": "npm run check:prettier -- --write",
+    "test": "jest --forceExit --detectOpenHandles --coverage --verbose -c jest.config.json",
+    "test:watch": "jest --watch --verbose -c jest.config.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-ecs": "^3.686.0",
+    "@dcl/schemas": "^15.1.0",
+    "@well-known-components/env-config-provider": "^1.1.1",
+    "@well-known-components/http-server": "^1.1.6",
+    "@well-known-components/interfaces": "^1.2.0",
+    "@well-known-components/logger": "^3.1.2",
+    "@well-known-components/metrics": "^2.0.1-20220909150423.commit-8f7e5bc",
+    "@well-known-components/pg-component": "^0.2.1",
+    "@well-known-components/thegraph-component": "^1.6.0",
+    "@well-known-components/tracer-component": "^1.2.0",
+    "@wert-io/widget-sc-signer": "^2.0.0",
+    "aws-sdk": "^2.1692.0",
+    "nodemon": "^3.1.7",
+    "sql-template-strings": "^2.2.2"
+  }
+}
