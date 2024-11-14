@@ -12,7 +12,8 @@
     "fix:code": "npm run check:code -- --fix",
     "fix:prettier": "npm run check:prettier -- --write",
     "test": "jest --forceExit --detectOpenHandles --coverage --verbose -c jest.config.json",
-    "test:watch": "jest --watch --verbose -c jest.config.json"
+    "test:watch": "jest --watch --verbose -c jest.config.json",
+    "lint": "eslint -c .eslintrc.json {src/**/*.ts,test/**/*.ts}"
   },
   "keywords": [],
   "author": "",
@@ -32,5 +33,9 @@
     "aws-sdk": "^2.1692.0",
     "nodemon": "^3.1.7",
     "sql-template-strings": "^2.2.2"
+  },
+  "devDependencies": {
+    "@dcl/eslint-config": "^2.2.1",
+    "@well-known-components/test-helpers": "^1.5.8"
   }
 }

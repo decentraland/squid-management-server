@@ -1,10 +1,6 @@
-import SQL, { SQLStatement } from "sql-template-strings";
+import { SQL, SQLStatement } from 'sql-template-strings'
 
-export const getPromoteQuery = (
-  serviceName: string,
-  schemaName: string,
-  project: string
-): SQLStatement => {
+export const getPromoteQuery = (serviceName: string, schemaName: string, project: string): SQLStatement => {
   return SQL`
       DO $$
       DECLARE
@@ -37,5 +33,5 @@ export const getPromoteQuery = (
       -- Commit the transaction
       COMMIT;
       END $$;
-  `;
-};
+  `
+}

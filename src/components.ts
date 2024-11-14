@@ -6,7 +6,6 @@ import {
 import { createLogComponent } from "@well-known-components/logger";
 import { metricDeclarations } from "./metrics";
 import { createMetricsComponent } from "@well-known-components/metrics";
-import { createSubgraphComponent } from "@well-known-components/thegraph-component";
 import { createTracerComponent } from "@well-known-components/tracer-component";
 import { AppComponents, GlobalContext } from "./types";
 import { createSubsquidComponent } from "./ports/squids/component";
