@@ -36,6 +36,9 @@
   },
   "devDependencies": {
     "@dcl/eslint-config": "^2.2.1",
-    "@well-known-components/test-helpers": "^1.5.8"
+    "@types/jest": "^29.5.14",
+    "@well-known-components/test-helpers": "^1.5.8",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
   }
 }
