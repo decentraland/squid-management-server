@@ -39,7 +39,7 @@ export async function createSubsquidComponent({
       const servicesResponse = await client.send(listServicesCommand)
 
       const serviceArns = servicesResponse.serviceArns || []
-      const squidServices = serviceArns.filter(arn => arn.includes('squid-server'))
+      const squidServices = serviceArns.filter(arn => arn.includes('-squid-server'))
 
       // Step 2: Get tasks for each service and fetch task IPs
       const results: Squid[] = []

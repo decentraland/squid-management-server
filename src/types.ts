@@ -6,8 +6,8 @@ import type {
   IBaseComponent,
   IMetricsComponent
 } from '@well-known-components/interfaces'
-import { metricDeclarations } from '@well-known-components/logger/dist/metrics'
 import { IPgComponent } from '@well-known-components/pg-component'
+import { metricDeclarations } from './metrics'
 import { ISquidComponent } from './ports/squids/types'
 
 export type GlobalContext = {

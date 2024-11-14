@@ -7,7 +7,7 @@ export async function pingHandler(context: Pick<HandlerContextWithPath<'metrics'
     components: { metrics }
   } = context
 
-  metrics.increment('wkc_logger_logs_total', {
+  metrics.increment('test_ping_counter', {
     pathname: url.pathname
   })
 
