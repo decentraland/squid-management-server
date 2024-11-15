@@ -12,7 +12,7 @@ import { IPgComponent } from '@well-known-components/pg-component'
 import { Network } from '@dcl/schemas'
 import { getPromoteQuery } from './queries'
 import { ISquidComponent, Squid, SquidMetric } from './types'
-import { getMetricValue, getSquidsNetworksMapping } from './utilts'
+import { getMetricValue, getSquidsNetworksMapping } from './utils'
 
 const AWS_REGION = 'us-east-1'
 
