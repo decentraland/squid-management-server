@@ -10,7 +10,7 @@ import {
 import { IConfigComponent, IFetchComponent } from '@well-known-components/interfaces'
 import { IPgComponent } from '@well-known-components/pg-component'
 import { Network } from '@dcl/schemas'
-import { getPromoteQuery } from './queries'
+import { getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
 import { ISquidComponent, Squid, SquidMetric } from './types'
 import { getMetricValue, getSquidsNetworksMapping } from './utils'
 
@@ -41,82 +41,100 @@ export async function createSubsquidComponent({
       const serviceArns = servicesResponse.serviceArns || []
       const squidServices = serviceArns.filter(arn => arn.includes('-squid-server'))
 
-      // Step 2: Get tasks for each service and fetch task IPs
-      const results: Squid[] = []
-
+      // Step 2: Describe services in parallel
       const describeServicesCommand = new DescribeServicesCommand({
         cluster,
         services: squidServices
       })
 
       const describeServicesResponse = await client.send(describeServicesCommand)
+      const services = describeServicesResponse.services || []
 
-      for (const squidService of describeServicesResponse.services || []) {
-        const serviceName = squidService.serviceName
-        const listTasksCommand = new ListTasksCommand({
-          cluster,
-          serviceName
-        })
-        const taskResponse = await client.send(listTasksCommand)
-        const taskArns = taskResponse.taskArns || []
+      // Process all services in parallel
+      const results = await Promise.all(
+        services.map(async squidService => {
+          const serviceName = squidService.serviceName
+          const listTasksCommand = new ListTasksCommand({
+            cluster,
+            serviceName
+          })
+          const taskResponse = await client.send(listTasksCommand)
+          const taskArns = taskResponse.taskArns || []
 
-        if (taskArns.length === 0) continue
+          if (taskArns.length === 0) return null
 
-        const describeTasksCommand = new DescribeTasksCommand({
-          cluster,
-          tasks: taskArns
-        })
-        const describeResponse = await client.send(describeTasksCommand)
-        const tasks = describeResponse.tasks || []
+          const describeTasksCommand = new DescribeTasksCommand({
+            cluster,
+            tasks: taskArns
+          })
+          const describeResponse = await client.send(describeTasksCommand)
+          const tasks = describeResponse.tasks || []
 
-        const squid: Partial<Squid> = {
-          name: squidService.serviceName || '',
-          service_name: squidService.serviceName || '',
-          metrics: {} as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
-        }
+          const squidName = squidService.serviceName || ''
+          const schemaName = (await dappsDatabase.query(getSchemaByServiceNameQuery(squidName))).rows[0]?.schema
+          const projectActiveSchema = (await dappsDatabase.query(getActiveSchemaQuery(squidName))).rows[0]?.schema
 
-        // there should be just one task per service
-        for (const task of tasks) {
-          squid.version = task.version || 0
-          squid.created_at = task.createdAt
-          squid.health_status = task.healthStatus
-          squid.service_status = task.lastStatus
-
-          const ip = task.attachments
-            ?.find(att => att.type === 'ElasticNetworkInterface')
-            ?.details?.find(detail => detail.name === 'privateIPv4Address')?.value
-
-          if (!ip) continue
-
-          // Step 3: Fetch /metrics from each IP for each network
-          try {
-            for (const network of getSquidsNetworksMapping()) {
-              const response = await fetch.fetch(`http://${ip}:${network.port}/metrics`)
-              const text = await response.text() // Use text() since the response is plain text
-
-              if (!squid.metrics) {
-                squid.metrics = {} as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
-              }
-
-              squid.metrics[network.name] = {
-                sqd_processor_sync_eta_seconds: getMetricValue(text, 'sqd_processor_sync_eta_seconds'),
-                sqd_processor_mapping_blocks_per_second: getMetricValue(text, 'sqd_processor_mapping_blocks_per_second'),
-                sqd_processor_last_block: getMetricValue(text, 'sqd_processor_last_block'),
-                sqd_processor_chain_height: getMetricValue(text, 'sqd_processor_chain_height')
-              }
-            }
-          } catch (error) {
-            console.error(`Failed to fetch metrics for ${ip}:`, error)
+          const squid: Partial<Squid> = {
+            name: squidName,
+            service_name: squidService.serviceName || '',
+            schema_name: schemaName,
+            project_active_schema: projectActiveSchema
           }
+
+          // there should be just one task per service
+          for (const task of tasks) {
+            squid.version = task.version || 0
+            squid.created_at = task.createdAt
+            squid.health_status = task.healthStatus
+            squid.service_status = task.lastStatus
+
+            const ip = task.attachments
+              ?.find(att => att.type === 'ElasticNetworkInterface')
+              ?.details?.find(detail => detail.name === 'privateIPv4Address')?.value
+
+            if (!ip) continue
+
+            // Fetch metrics for each network in parallel
+            try {
+              const metricsPromises = getSquidsNetworksMapping().map(async network => {
+                const response = await fetch.fetch(`http://${ip}:${network.port}/metrics`)
+                const text = await response.text() // Use text() since the response is plain text
+
+                return {
+                  networkName: network.name,
+                  metrics: {
+                    sqd_processor_sync_eta_seconds: getMetricValue(text, 'sqd_processor_sync_eta_seconds'),
+                    sqd_processor_mapping_blocks_per_second: getMetricValue(text, 'sqd_processor_mapping_blocks_per_second'),
+                    sqd_processor_last_block: getMetricValue(text, 'sqd_processor_last_block'),
+                    sqd_processor_chain_height: getMetricValue(text, 'sqd_processor_chain_height')
+                  }
+                }
+              })
+
+              const metricsResults = await Promise.all(metricsPromises)
+              for (const { networkName, metrics } of metricsResults) {
+                if (!squid.metrics) {
+                  squid.metrics = {} as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
+                }
+                squid.metrics[networkName] = metrics
+              }
+            } catch (error) {
+              console.error(`Failed to fetch metrics for ${ip}:`, error)
+            }
+          }
+
+          // Only include complete squid objects
           if (squid.created_at && squid.health_status && squid.service_status) {
-            results.push(squid as Squid)
+            return squid as Squid
           } else {
             console.warn(`Skipping incomplete squid: ${squid.service_name}`)
+            return null
           }
-        }
-      }
+        })
+      )
 
-      return results
+      // Filter out null values
+      return results.filter((squid): squid is Squid => squid !== null)
     } catch (error) {
       console.error('Error listing services:', error)
       return []

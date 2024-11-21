@@ -6,6 +6,8 @@ export const getMetricValue = (metrics: string, metricName: string) => {
   return match ? parseFloat(match[1]) : 0
 }
 
+export const getProjectNameFromService = (serviceName: string): string => serviceName.split('-squid-server-')[0]
+
 export function getSquidsNetworksMapping(): {
   name: Network.ETHEREUM | Network.MATIC
   port: number
