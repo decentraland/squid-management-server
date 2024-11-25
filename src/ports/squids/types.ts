@@ -10,9 +10,11 @@ export type SquidMetric = {
 
 export type Squid = {
   name: string
+  service_name: string
+  schema_name: string
+  project_active_schema: string
   created_at: Date | undefined
   health_status: HealthStatus | undefined
-  service_name: string
   service_status: string | undefined
   version: number
   metrics: Record<Network.ETHEREUM | Network.MATIC, SquidMetric>

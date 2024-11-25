@@ -1,4 +1,5 @@
 import { SQL, SQLStatement } from 'sql-template-strings'
+import { getProjectNameFromService } from './utils'
 
 export const getPromoteQuery = (serviceName: string, schemaName: string, project: string): SQLStatement => {
   return SQL`
@@ -33,5 +34,23 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
       -- Commit the transaction
       COMMIT;
       END $$;
+  `
+}
+
+export const getSchemaByServiceNameQuery = (serviceName: string): SQLStatement => {
+  return SQL`
+      SELECT schema
+      FROM public.indexers
+      WHERE service = ${serviceName};
+  `
+}
+
+export const getActiveSchemaQuery = (serviceName: string): SQLStatement => {
+  const projectName = getProjectNameFromService(serviceName)
+
+  return SQL`
+      SELECT schema
+      FROM public.squids
+      WHERE name = ${projectName};
   `
 }
