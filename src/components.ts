@@ -16,8 +16,10 @@ export async function initComponents(): Promise<AppComponents> {
   })
   const cors = {
     origin: (await config.requireString('CORS_ORIGIN')).split(';').map(origin => new RegExp(origin)),
-    methods: await config.requireString('CORS_METHODS')
+    methods: await config.requireString('CORS_METHODS'),
+    credentials: true
   }
+
   const tracer = createTracerComponent()
   const metrics = await createMetricsComponent(metricDeclarations, { config })
   const logs = await createLogComponent({ metrics })
