@@ -12,7 +12,7 @@ import { IPgComponent } from '@well-known-components/pg-component'
 import { Network } from '@dcl/schemas'
 import { getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
 import { ISquidComponent, Squid, SquidMetric } from './types'
-import { getMetricValue, getSquidsNetworksMapping } from './utils'
+import { getMetricValue, getProjectNameFromService, getSquidsNetworksMapping } from './utils'
 
 const AWS_REGION = 'us-east-1'
 
@@ -88,9 +88,12 @@ export async function createSubsquidComponent({
             squid.health_status = task.healthStatus
             squid.service_status = task.lastStatus
 
+            const ElasticNetworkInterface = 'ElasticNetworkInterface'
+            const privateIPv4Address = 'privateIPv4Address'
+
             const ip = task.attachments
-              ?.find(att => att.type === 'ElasticNetworkInterface')
-              ?.details?.find(detail => detail.name === 'privateIPv4Address')?.value
+              ?.find(att => att.type === ElasticNetworkInterface)
+              ?.details?.find(detail => detail.name === privateIPv4Address)?.value
 
             if (!ip) continue
 
@@ -157,12 +160,14 @@ export async function createSubsquidComponent({
 
   async function promote(serviceName: string): Promise<void> {
     try {
-      const projectName = serviceName.split('-')[0] // e.g: service name is marketplace-squid-server-a-blue-92e812a, project is marketplace
+      const projectName = getProjectNameFromService(serviceName) // e.g: service name is marketplace-squid-server-a-blue-92e812a, project is marketplace
       const schemaName = `squid_${projectName}` // e.g: squid_marketplace
       const promoteQuery = getPromoteQuery(serviceName, schemaName, projectName)
 
+      // NOTE: in the future, depending on the project we might want to run the promote query in a different db
       const result = await dappsDatabase.query(promoteQuery)
       console.log('result: ', result) // @TODO implement a proper response
+      console.log('result.rows: ', result.rows) // @TODO implement a proper response
     } catch (error) {
       console.log('error: ', error)
     }
