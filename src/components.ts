@@ -19,10 +19,11 @@ export async function initComponents(): Promise<AppComponents> {
   console.log('corsString: ', corsString)
   console.log('validCORSJsonString: ', validCORSJsonString)
   console.log('JSON.parse(validCORSJsonString): ', JSON.parse(validCORSJsonString))
+  console.log('hardcoding cors')
 
   const cors = {
     origin: (await config.requireString('CORS_ORIGIN')).split(';').map(origin => new RegExp(origin)),
-    methods: JSON.parse(validCORSJsonString),
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true
   }
 
