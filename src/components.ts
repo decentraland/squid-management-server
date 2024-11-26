@@ -14,9 +14,12 @@ export async function initComponents(): Promise<AppComponents> {
   const config = await createDotEnvConfigComponent({
     path: ['.env.default', '.env']
   })
+  const corsString = await config.requireString('CORS_METHODS')
+  const validCORSJsonString = corsString.replace(/'/g, '"')
+
   const cors = {
     origin: (await config.requireString('CORS_ORIGIN')).split(';').map(origin => new RegExp(origin)),
-    methods: await config.requireString('CORS_METHODS'),
+    methods: JSON.parse(validCORSJsonString),
     credentials: true
   }
 
