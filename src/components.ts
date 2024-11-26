@@ -22,7 +22,7 @@ export async function initComponents(): Promise<AppComponents> {
 
   const cors = {
     origin: (await config.requireString('CORS_ORIGIN')).split(';').map(origin => new RegExp(origin)),
-    methods: JSON.parse(validCORSJsonString),
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true
   }
 
