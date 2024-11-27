@@ -27,10 +27,11 @@ export async function stopSquidHandler(context: Pick<HandlerContextWithPath<'squ
       status: StatusCode.OK
     }
   } catch (e) {
+    console.error('error: ', e)
     return {
       status: StatusCode.BAD_REQUEST,
       body: {
-        message: isErrorWithMessage(e) ? e.message : 'Could not stop squid'
+        message: isErrorWithMessage(e) ? e.message : 'Could not stop the squid'
       }
     }
   }
@@ -48,10 +49,11 @@ export async function promoteSquidHandler(context: Pick<HandlerContextWithPath<'
       status: StatusCode.OK
     }
   } catch (e) {
+    console.error('error: ', e)
     return {
       status: StatusCode.BAD_REQUEST,
       body: {
-        message: isErrorWithMessage(e) ? e.message : 'Could not promote squid'
+        message: isErrorWithMessage(e) ? e.message : 'Could not promote the squid'
       }
     }
   }

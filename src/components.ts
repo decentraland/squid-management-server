@@ -16,14 +16,10 @@ export async function initComponents(): Promise<AppComponents> {
   })
   const corsString = await config.requireString('CORS_METHODS')
   const validCORSJsonString = corsString.replace(/'/g, '"')
-  console.log('corsString: ', corsString)
-  console.log('validCORSJsonString: ', validCORSJsonString)
-  console.log('JSON.parse(validCORSJsonString): ', JSON.parse(validCORSJsonString))
-  console.log('hardcoding cors')
 
   const cors = {
     origin: (await config.requireString('CORS_ORIGIN')).split(';').map(origin => new RegExp(origin)),
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: JSON.parse(validCORSJsonString),
     credentials: true
   }
 

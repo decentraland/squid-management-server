@@ -1,56 +1,95 @@
+import { Client } from 'pg'
 import { SQL, SQLStatement } from 'sql-template-strings'
 import { getProjectNameFromService } from './utils'
 
+const client = new Client()
+
+export function escapeLiteral(value: string): string {
+  return client.escapeLiteral(value) // Escapes a string safely for use in PostgreSQL
+}
+
+export function escapeIdentifier(value: string): string {
+  return client.escapeIdentifier(value) // Escapes an identifier (e.g., schema, table names)
+}
+
 export const getPromoteQuery = (serviceName: string, schemaName: string, project: string): SQLStatement => {
+  const safeServiceName = escapeLiteral(serviceName)
+  const safeSchemaName = escapeIdentifier(schemaName)
+  const safeProjectName = escapeLiteral(project)
+
   return SQL`
       DO $$
       DECLARE
           old_schema_name TEXT;
           new_schema_name TEXT;
-          db_user TEXT;
+          writer_user TEXT;
       BEGIN
         -- Fetch the new schema name and database user from the indexers table
-        SELECT schema, db_user INTO new_schema_name, db_user 
+        SELECT schema, db_user INTO new_schema_name, writer_user 
         FROM public.indexers 
-        WHERE service = ${serviceName};
+        WHERE service = `
+    .append(safeServiceName)
+    .append(
+      SQL` ORDER BY created_at DESC LIMIT 1;
         
         -- Fetch the old schema name from the squids table
         SELECT schema INTO old_schema_name 
         FROM squids 
-        WHERE name = '${project}';
+        WHERE name = '`
+        .append(safeProjectName)
+        .append(
+          SQL`';
         
         -- Rename the old schema
-        EXECUTE format('ALTER SCHEMA ${schemaName} RENAME TO %I', old_schema_name);
+        EXECUTE format('ALTER SCHEMA `
+            .append(safeSchemaName)
+            .append(
+              SQL` RENAME TO %I', old_schema_name);
         
         -- Rename the new schema to the desired name
-        EXECUTE format('ALTER SCHEMA %I RENAME TO ${schemaName}', new_schema_name);
+        EXECUTE format('ALTER SCHEMA %I RENAME TO `
+                .append(safeSchemaName)
+                .append(
+                  SQL`', new_schema_name);
         
         -- Update the search path for the user
-        EXECUTE format('ALTER USER %I SET search_path TO ${schemaName}', db_user);
+        EXECUTE format('ALTER USER %I SET search_path TO `
+                    .append(safeSchemaName)
+                    .append(
+                      SQL`', writer_user);
         
         -- Update the schema in the squids table
-        UPDATE squids SET schema = new_schema_name WHERE name = '${project}';
+        UPDATE squids SET schema = new_schema_name WHERE name = '`.append(project).append(SQL`';
         
       -- Commit the transaction
       COMMIT;
       END $$;
-  `
+  `)
+                    )
+                )
+            )
+        )
+    )
 }
 
 export const getSchemaByServiceNameQuery = (serviceName: string): SQLStatement => {
+  const safeServiceName = escapeLiteral(serviceName)
   return SQL`
       SELECT schema
       FROM public.indexers
-      WHERE service = ${serviceName};
+      WHERE service = ${safeServiceName}
+      ORDER BY created_at DESC 
+      LIMIT 1;
   `
 }
 
 export const getActiveSchemaQuery = (serviceName: string): SQLStatement => {
   const projectName = getProjectNameFromService(serviceName)
+  const safeProjectName = escapeLiteral(projectName)
 
   return SQL`
       SELECT schema
       FROM public.squids
-      WHERE name = ${projectName};
+      WHERE name = ${safeProjectName};
   `
 }
