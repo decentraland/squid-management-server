@@ -35,10 +35,10 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
         -- Fetch the old schema name from the squids table
         SELECT schema INTO old_schema_name 
         FROM squids 
-        WHERE name = '`
+        WHERE name = `
         .append(safeProjectName)
         .append(
-          SQL`';
+          SQL`;
         
         -- Rename the old schema
         EXECUTE format('ALTER SCHEMA `
@@ -50,16 +50,16 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
         EXECUTE format('ALTER SCHEMA %I RENAME TO `
                 .append(safeSchemaName)
                 .append(
-                  SQL`', new_schema_name);
+                  SQL`, new_schema_name);
         
         -- Update the search path for the user
         EXECUTE format('ALTER USER %I SET search_path TO `
                     .append(safeSchemaName)
                     .append(
-                      SQL`', writer_user);
+                      SQL`, writer_user);
         
         -- Update the schema in the squids table
-        UPDATE squids SET schema = new_schema_name WHERE name = '`.append(project).append(SQL`';
+        UPDATE squids SET schema = new_schema_name WHERE name = `.append(safeProjectName).append(SQL`;
         
       -- Commit the transaction
       COMMIT;
