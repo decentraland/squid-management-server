@@ -61,15 +61,6 @@ export async function createSubsquidComponent({
           const taskResponse = await client.send(listTasksCommand)
           const taskArns = taskResponse.taskArns || []
 
-          if (taskArns.length === 0) return null
-
-          const describeTasksCommand = new DescribeTasksCommand({
-            cluster,
-            tasks: taskArns
-          })
-          const describeResponse = await client.send(describeTasksCommand)
-          const tasks = describeResponse.tasks || []
-
           const squidName = squidService.serviceName || ''
           const schemaName = (await dappsDatabase.query(getSchemaByServiceNameQuery(squidName))).rows[0]?.schema
           const projectActiveSchema = (await dappsDatabase.query(getActiveSchemaQuery(squidName))).rows[0]?.schema
@@ -78,8 +69,20 @@ export async function createSubsquidComponent({
             name: squidName,
             service_name: squidService.serviceName || '',
             schema_name: schemaName,
-            project_active_schema: projectActiveSchema
+            project_active_schema: projectActiveSchema,
+            metrics: {} as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
           }
+
+          if (taskArns.length === 0) {
+            return squid
+          }
+
+          const describeTasksCommand = new DescribeTasksCommand({
+            cluster,
+            tasks: taskArns
+          })
+          const describeResponse = await client.send(describeTasksCommand)
+          const tasks = describeResponse.tasks || []
 
           // there should be just one task per service
           for (const task of tasks) {
@@ -151,26 +154,21 @@ export async function createSubsquidComponent({
         service: serviceName,
         desiredCount: 0
       })
-      const updateServiceResponse = await client.send(updateServiceCommand)
-      console.log('updateServiceResponse: ', updateServiceResponse) // @TODO: refactor this, for now just print it to the console
+      await client.send(updateServiceCommand)
+      console.log(`Service ${serviceName} stopped!`)
     } catch (error) {
       console.log('error: ', error)
     }
   }
 
   async function promote(serviceName: string): Promise<void> {
-    try {
-      const projectName = getProjectNameFromService(serviceName) // e.g: service name is marketplace-squid-server-a-blue-92e812a, project is marketplace
-      const schemaName = `squid_${projectName}` // e.g: squid_marketplace
-      const promoteQuery = getPromoteQuery(serviceName, schemaName, projectName)
+    const projectName = getProjectNameFromService(serviceName) // e.g: service name is marketplace-squid-server-a-blue-92e812a, project is marketplace
+    const schemaName = `squid_${projectName}` // e.g: squid_marketplace
+    const promoteQuery = getPromoteQuery(serviceName, schemaName, projectName)
 
-      // NOTE: in the future, depending on the project we might want to run the promote query in a different db
-      const result = await dappsDatabase.query(promoteQuery)
-      console.log('result: ', result) // @TODO implement a proper response
-      console.log('result.rows: ', result.rows) // @TODO implement a proper response
-    } catch (error) {
-      console.log('error: ', error)
-    }
+    // NOTE: in the future, depending on the project we might want to run the promote query in a different db
+    await dappsDatabase.query(promoteQuery)
+    console.log(`The ${serviceName} was promoted and the active schema is ${schemaName}`) // @TODO implement a proper response
   }
 
   return {
