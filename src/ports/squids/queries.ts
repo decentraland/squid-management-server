@@ -73,11 +73,10 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
 }
 
 export const getSchemaByServiceNameQuery = (serviceName: string): SQLStatement => {
-  const safeServiceName = escapeLiteral(serviceName)
   return SQL`
       SELECT schema
       FROM public.indexers
-      WHERE service = ${safeServiceName}
+      WHERE service = ${serviceName}
       ORDER BY created_at DESC 
       LIMIT 1;
   `
@@ -85,11 +84,10 @@ export const getSchemaByServiceNameQuery = (serviceName: string): SQLStatement =
 
 export const getActiveSchemaQuery = (serviceName: string): SQLStatement => {
   const projectName = getProjectNameFromService(serviceName)
-  const safeProjectName = escapeLiteral(projectName)
 
   return SQL`
       SELECT schema
       FROM public.squids
-      WHERE name = ${safeProjectName};
+      WHERE name = ${projectName};
   `
 }
