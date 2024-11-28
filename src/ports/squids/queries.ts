@@ -9,12 +9,11 @@ export function escapeLiteral(value: string): string {
 }
 
 export function escapeIdentifier(value: string): string {
-  return client.escapeIdentifier(value) // Escapes an identifier (e.g., schema, table names)
+  return client.escapeIdentifier(value) // Escapes an identifier (e.g., table names)
 }
 
 export const getPromoteQuery = (serviceName: string, schemaName: string, project: string): SQLStatement => {
   const safeServiceName = escapeLiteral(serviceName)
-  const safeSchemaName = escapeIdentifier(schemaName)
   const safeProjectName = escapeLiteral(project)
 
   return SQL`
@@ -30,7 +29,8 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
         WHERE service = `
     .append(safeServiceName)
     .append(
-      SQL` ORDER BY created_at DESC LIMIT 1;
+      SQL` 
+        ORDER BY created_at DESC LIMIT 1;
         
         -- Fetch the old schema name from the squids table
         SELECT schema INTO old_schema_name 
@@ -41,28 +41,26 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
           SQL`;
         
         -- Rename the old schema
-        EXECUTE format('ALTER SCHEMA `
-            .append(safeSchemaName)
+        EXECUTE format('ALTER SCHEMA %I RENAME TO %I', '`
+            .append(schemaName)
             .append(
-              SQL` RENAME TO %I', old_schema_name);
+              SQL`', old_schema_name);
         
         -- Rename the new schema to the desired name
-        EXECUTE format('ALTER SCHEMA %I RENAME TO `
-                .append(safeSchemaName)
+        EXECUTE format('ALTER SCHEMA %I RENAME TO %I', new_schema_name, '`
+                .append(schemaName)
                 .append(
-                  SQL`, new_schema_name);
+                  SQL`');
         
         -- Update the search path for the user
-        EXECUTE format('ALTER USER %I SET search_path TO `
-                    .append(safeSchemaName)
+        EXECUTE format('ALTER USER %I SET search_path TO %I', writer_user, '`
+                    .append(schemaName)
                     .append(
-                      SQL`, writer_user);
+                      SQL`');
         
         -- Update the schema in the squids table
-        UPDATE squids SET schema = new_schema_name WHERE name = `.append(safeProjectName).append(SQL`;
-        
-      -- Commit the transaction
-      COMMIT;
+        UPDATE squids 
+        SET schema = new_schema_name WHERE name = `.append(safeProjectName).append(SQL`;
       END $$;
   `)
                     )
