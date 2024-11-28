@@ -60,14 +60,9 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
         
         -- Update the schema in the squids table
         UPDATE squids 
-        SET schema = `
-                        .append(escapeLiteral(schemaName))
-                        .append(
-                          SQL`
-        WHERE name = `.append(safeProjectName).append(SQL`;
+        SET schema = new_schema_name WHERE name = `.append(safeProjectName).append(SQL`;
       END $$;
   `)
-                        )
                     )
                 )
             )
