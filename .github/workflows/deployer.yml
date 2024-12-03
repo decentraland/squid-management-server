@@ -8,9 +8,8 @@ on:
         type: choice
         options:
           - dev
-          - stg
           - prd
-        default: prd
+        default: dev
         description: Environment
       tag:
         required: true
