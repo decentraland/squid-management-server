@@ -22,6 +22,7 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
           old_schema_name TEXT;
           new_schema_name TEXT;
           writer_user TEXT;
+          old_user TEXT;
       BEGIN
         -- Fetch the new schema name and database user from the indexers table
         SELECT schema, db_user INTO new_schema_name, writer_user 
@@ -58,6 +59,14 @@ export const getPromoteQuery = (serviceName: string, schemaName: string, project
                     .append(
                       SQL`');
         
+        SELECT db_user INTO old_user 
+        FROM public.indexers 
+        WHERE schema = old_schema_name 
+        ORDER BY created_at DESC LIMIT 1;
+
+        -- Update the search path for old user to use the old_schema
+        EXECUTE format('ALTER USER %I SET search_path TO %I', old_user, old_schema_name);
+
         -- Update the schema in the squids table
         UPDATE squids 
         SET schema = new_schema_name WHERE name = `.append(safeProjectName).append(SQL`;
