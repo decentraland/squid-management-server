@@ -12,6 +12,21 @@ export function escapeIdentifier(value: string): string {
   return client.escapeIdentifier(value) // Escapes an identifier (e.g., table names)
 }
 
+/**
+ * Generates a SQL query to promote a new schema to be the active one for a given service.
+ *
+ * @param serviceName - The name of the service (e.g., 'squid-marketplace' or 'squid-trades')
+ * @param schemaName - The target schema name that will be used (e.g., 'squid_marketplace' or 'squid_trades')
+ * @param project - The project name as stored in the squids table
+ *
+ * This function:
+ * 1. Gets the new schema name and its database user from indexers table
+ * 2. Gets the old schema name from squids table
+ * 3. Renames the current active schema to a backup name
+ * 4. Renames the new schema to be the active one
+ * 5. Updates the search paths for both the new and old database users
+ * 6. Updates the squids table to reflect the new active schema
+ */
 export const getPromoteQuery = (serviceName: string, schemaName: string, project: string): SQLStatement => {
   const safeServiceName = escapeLiteral(serviceName)
   const safeProjectName = escapeLiteral(project)
