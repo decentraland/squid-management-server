@@ -170,36 +170,38 @@ export async function createSubsquidComponent({
     await dappsDatabase.query(promoteQuery)
     console.log(`The ${serviceName} was promoted and the active schema is ${schemaName}`)
 
-    // Call marketplace server to recreate triggers and refresh materialized view
-    try {
-      const marketplaceServerUrl = await config.getString('MARKETPLACE_SERVER_URL')
-      if (!marketplaceServerUrl) {
-        console.warn('MARKETPLACE_SERVER_URL not configured, skipping materialized view recreation')
-        return
-      }
-
-      const apiToken = await config.getString('MARKETPLACE_SERVER_TRADES_API_TOKEN')
-      if (!apiToken) {
-        console.warn('MARKETPLACE_SERVER_TRADES_API_TOKEN not configured, skipping materialized view recreation')
-        return
-      }
-
-      const response = await fetch.fetch(`${marketplaceServerUrl}/v1/trades/materialized-view/recreate`, {
-        method: 'POST',
-        headers: {
-          'x-api-token': apiToken
+    // Call marketplace server to recreate triggers and refresh materialized view for marketplace or trades squids
+    if (serviceName.includes('marketplace-squid-server') || serviceName.includes('trades-squid-server')) {
+      try {
+        const marketplaceServerUrl = await config.getString('MARKETPLACE_SERVER_URL')
+        if (!marketplaceServerUrl) {
+          console.warn('MARKETPLACE_SERVER_URL not configured, skipping materialized view recreation')
+          return
         }
-      })
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error(`Failed to recreate materialized view: ${response.status} ${errorText}`)
-      } else {
-        console.log('Successfully recreated materialized view and triggers')
+        const apiToken = await config.getString('MARKETPLACE_SERVER_TRADES_API_TOKEN')
+        if (!apiToken) {
+          console.warn('MARKETPLACE_SERVER_TRADES_API_TOKEN not configured, skipping materialized view recreation')
+          return
+        }
+
+        const response = await fetch.fetch(`${marketplaceServerUrl}/v1/trades/materialized-view/recreate`, {
+          method: 'POST',
+          headers: {
+            'x-api-token': apiToken
+          }
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          console.error(`Failed to recreate materialized view: ${response.status} ${errorText}`)
+        } else {
+          console.log('Successfully recreated materialized view and triggers')
+        }
+      } catch (error) {
+        console.error('Error calling marketplace server to recreate materialized view:', error)
+        // We don't throw here to avoid failing the promotion if the marketplace server call fails
       }
-    } catch (error) {
-      console.error('Error calling marketplace server to recreate materialized view:', error)
-      // We don't throw here to avoid failing the promotion if the marketplace server call fails
     }
   }
 
