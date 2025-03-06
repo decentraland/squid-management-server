@@ -53,7 +53,7 @@ export async function createSubsquidComponent({
       // Process all services in parallel
       const results = await Promise.all(
         services.map(async squidService => {
-          const serviceName = squidService.serviceName
+          const serviceName = squidService.serviceName || ''
           const listTasksCommand = new ListTasksCommand({
             cluster,
             serviceName
@@ -61,13 +61,12 @@ export async function createSubsquidComponent({
           const taskResponse = await client.send(listTasksCommand)
           const taskArns = taskResponse.taskArns || []
 
-          const squidName = squidService.serviceName || ''
-          const schemaName = (await dappsDatabase.query(getSchemaByServiceNameQuery(squidName))).rows[0]?.schema
-          const projectActiveSchema = (await dappsDatabase.query(getActiveSchemaQuery(squidName))).rows[0]?.schema
+          const schemaName = (await dappsDatabase.query(getSchemaByServiceNameQuery(serviceName))).rows[0]?.schema
+          const projectActiveSchema = (await dappsDatabase.query(getActiveSchemaQuery(serviceName))).rows[0]?.schema
 
           const squid: Partial<Squid> = {
-            name: squidName,
-            service_name: squidService.serviceName || '',
+            name: serviceName,
+            service_name: serviceName,
             schema_name: schemaName,
             project_active_schema: projectActiveSchema,
             metrics: {} as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
@@ -102,28 +101,38 @@ export async function createSubsquidComponent({
 
             // Fetch metrics for each network in parallel
             try {
-              const metricsPromises = getSquidsNetworksMapping().map(async network => {
-                const response = await fetch.fetch(`http://${ip}:${network.port}/metrics`)
-                const text = await response.text() // Use text() since the response is plain text
+              const metricsResults = await Promise.allSettled(
+                getSquidsNetworksMapping().map(async network => {
+                  const response = await fetch.fetch(`http://${ip}:${network.port}/metrics`)
+                  const text = await response.text()
 
-                return {
-                  networkName: network.name,
-                  metrics: {
-                    sqd_processor_sync_eta_seconds: getMetricValue(text, 'sqd_processor_sync_eta_seconds'),
-                    sqd_processor_mapping_blocks_per_second: getMetricValue(text, 'sqd_processor_mapping_blocks_per_second'),
-                    sqd_processor_last_block: getMetricValue(text, 'sqd_processor_last_block'),
-                    sqd_processor_chain_height: getMetricValue(text, 'sqd_processor_chain_height')
+                  return {
+                    networkName: network.name,
+                    metrics: {
+                      sqd_processor_sync_eta_seconds: getMetricValue(text, 'sqd_processor_sync_eta_seconds'),
+                      sqd_processor_mapping_blocks_per_second: getMetricValue(text, 'sqd_processor_mapping_blocks_per_second'),
+                      sqd_processor_last_block: getMetricValue(text, 'sqd_processor_last_block'),
+                      sqd_processor_chain_height: getMetricValue(text, 'sqd_processor_chain_height')
+                    }
                   }
+                })
+              )
+
+              // Process successful metric fetches
+              metricsResults.forEach((result, index) => {
+                if (result.status === 'fulfilled') {
+                  const { networkName, metrics } = result.value
+                  if (!squid.metrics) {
+                    squid.metrics = {
+                      [Network.ETHEREUM]: {} as SquidMetric,
+                      [Network.MATIC]: {} as SquidMetric
+                    }
+                  }
+                  squid.metrics[networkName] = metrics
+                } else {
+                  console.error(`Failed to fetch metrics for network ${getSquidsNetworksMapping()[index].name}:`, result.reason)
                 }
               })
-
-              const metricsResults = await Promise.all(metricsPromises)
-              for (const { networkName, metrics } of metricsResults) {
-                if (!squid.metrics) {
-                  squid.metrics = {} as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
-                }
-                squid.metrics[networkName] = metrics
-              }
             } catch (error) {
               console.error(`Failed to fetch metrics for ${ip}:`, error)
             }

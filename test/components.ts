@@ -12,6 +12,8 @@ import { createPgComponent } from '../src/ports/db/component'
 import { createSubsquidComponent } from '../src/ports/squids/component'
 import { main } from '../src/service'
 import { GlobalContext, TestComponents } from '../src/types'
+import { createSlackComponent } from '../src/ports/slack'
+import { createSquidMonitorJob } from '../src/ports/job/squid-monitor'
 
 /**
  * Behaves like Jest "describe" function, used to describe a test for a
@@ -50,6 +52,8 @@ async function initComponents(): Promise<TestComponents> {
     dappsDatabase,
     config
   })
+  const slack = await createSlackComponent({ config })
+  const squidMonitorJob = await createSquidMonitorJob({ config, logs, squids, slack })
 
   return {
     config,
@@ -59,6 +63,8 @@ async function initComponents(): Promise<TestComponents> {
     fetch,
     dappsDatabase,
     metrics,
-    squids
+    squids,
+    slack,
+    squidMonitorJob
   }
 }
