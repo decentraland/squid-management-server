@@ -9,11 +9,11 @@ import { createTracerComponent } from '@well-known-components/tracer-component'
 import { createFetchComponent } from '../src/adapters/fetch'
 import { metricDeclarations } from '../src/metrics'
 import { createPgComponent } from '../src/ports/db/component'
+import { createSquidMonitorJob } from '../src/ports/job/squid-monitor'
+import { createSlackComponent } from '../src/ports/slack'
 import { createSubsquidComponent } from '../src/ports/squids/component'
 import { main } from '../src/service'
 import { GlobalContext, TestComponents } from '../src/types'
-import { createSlackComponent } from '../src/ports/slack'
-import { createSquidMonitorJob } from '../src/ports/job/squid-monitor'
 
 /**
  * Behaves like Jest "describe" function, used to describe a test for a
