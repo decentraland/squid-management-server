@@ -3,6 +3,7 @@ import { AppComponents } from '../../types'
 import { SlackMessage } from '../slack/component'
 import { Squid } from '../squids/types'
 import { createJobComponent } from './component'
+import { MOCK_SQUIDS } from './mocks'
 import { IJobComponent } from './types'
 
 const ONE_MINUTE = 60 * 1000
@@ -12,36 +13,6 @@ export const ETA_CONSIDERED_OUT_OF_SYNC = 100
 const IS_PRODUCTION = process.env.NODE_ENV === 'production'
 const ENV_PREFIX = IS_PRODUCTION ? '[PRD]' : '[DEV]'
 const BASE_URL = IS_PRODUCTION ? 'https://decentraland.org/squid-management-ui' : 'https://decentraland.zone/squid-management-ui'
-
-const MOCK_SQUIDS: Squid[] = [
-  {
-    name: 'mock-marketplace-squid',
-    service_name: 'mock-marketplace-squid-server',
-    schema_name: 'squid_marketplace',
-    project_active_schema: 'squid_marketplace',
-    version: 1,
-    created_at: new Date(),
-    health_status: 'HEALTHY',
-    service_status: 'RUNNING',
-    metrics: {
-      [Network.ETHEREUM]: {
-        sqd_processor_sync_eta_seconds: 30, // Intentionally out of sync for testing
-        sqd_processor_mapping_blocks_per_second: 5.2,
-        sqd_processor_last_block: 18500000,
-        sqd_processor_chain_height: 18500100
-      },
-      [Network.MATIC]: {
-        // Note: In real data, this value might be null or undefined even though
-        // the type definition doesn't allow it. Our code handles this case.
-        sqd_processor_sync_eta_seconds: 0, // We'll use 0 for the mock but the code will still check for null
-        sqd_processor_mapping_blocks_per_second: 10.5,
-        sqd_processor_last_block: 45600000,
-        sqd_processor_chain_height: 45600200
-      }
-    }
-  }
-]
-// END OF MOCK - REMOVE BEFORE PUSHING TO PRODUCTION
 
 export async function createSquidMonitorJob(
   components: Pick<AppComponents, 'logs' | 'squids' | 'config' | 'slack'>
