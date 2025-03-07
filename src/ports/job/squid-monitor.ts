@@ -39,7 +39,7 @@ export async function createSquidMonitorJob(
         await checkSquidSynchronization(squid)
       }
     } catch (error) {
-      console.error('❌ Error monitoring squids:', error)
+      logger.error('❌ Error monitoring squids:', { error: formatError(error) })
 
       let errorMessage = 'Unknown error'
       if (error instanceof Error) {
@@ -85,6 +85,22 @@ export async function createSquidMonitorJob(
 
       await slack.sendFormattedMessage(errorSlackMessage)
     }
+  }
+
+  // Helper function to format errors for logging
+  function formatError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message
+    } else if (typeof error === 'string') {
+      return error
+    } else if (error && typeof error === 'object') {
+      try {
+        return JSON.stringify(error)
+      } catch {
+        return 'Non-serializable error'
+      }
+    }
+    return 'Unknown error'
   }
 
   async function checkSquidSynchronization(squid: Squid) {
@@ -241,7 +257,7 @@ export async function createSquidMonitorJob(
     repeat: true,
     startupDelay: 0,
     onError: error => {
-      console.error('❌ Error in squid monitor job:', error)
+      logger.error('❌ Error in squid monitor job:', { error: formatError(error) })
     }
   })
 }

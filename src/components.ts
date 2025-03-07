@@ -41,11 +41,13 @@ export async function initComponents(): Promise<AppComponents> {
   const squids = await createSubsquidComponent({
     fetch,
     dappsDatabase,
-    config
+    config,
+    logs
   })
 
   const slack = await createSlackComponent({
-    config
+    config,
+    logs
   })
 
   const squidMonitorJob = await createSquidMonitorJob({ logs, squids, config, slack })

@@ -7,7 +7,7 @@ import {
   UpdateServiceCommand,
   DescribeServicesCommand
 } from '@aws-sdk/client-ecs'
-import { IConfigComponent, IFetchComponent } from '@well-known-components/interfaces'
+import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { IPgComponent } from '@well-known-components/pg-component'
 import { Network } from '@dcl/schemas'
 import { getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
@@ -19,12 +19,15 @@ const AWS_REGION = 'us-east-1'
 export async function createSubsquidComponent({
   fetch,
   dappsDatabase,
-  config
+  config,
+  logs
 }: {
   fetch: IFetchComponent
   dappsDatabase: IPgComponent
   config: IConfigComponent
+  logs: ILoggerComponent
 }): Promise<ISquidComponent> {
+  const logger = logs.getLogger('squids-component')
   const cluster = await config.requireString('AWS_CLUSTER_NAME')
   const client = new ECSClient({ region: AWS_REGION })
 
@@ -76,6 +79,7 @@ export async function createSubsquidComponent({
             return squid
           }
 
+          // Step 3: Describe tasks to get container information
           const describeTasksCommand = new DescribeTasksCommand({
             cluster,
             tasks: taskArns
@@ -130,11 +134,11 @@ export async function createSubsquidComponent({
                   }
                   squid.metrics[networkName] = metrics
                 } else {
-                  console.error(`Failed to fetch metrics for network ${getSquidsNetworksMapping()[index].name}:`, result.reason)
+                  logger?.error(`Failed to fetch metrics for network ${getSquidsNetworksMapping()[index].name}:`, result.reason)
                 }
               })
             } catch (error) {
-              console.error(`Failed to fetch metrics for ${ip}:`, error)
+              logger?.error(`Failed to fetch metrics for ${ip}:`, { error: String(error) })
             }
           }
 
@@ -142,7 +146,7 @@ export async function createSubsquidComponent({
           if (squid.created_at && squid.health_status && squid.service_status) {
             return squid as Squid
           } else {
-            console.warn(`Skipping incomplete squid: ${squid.service_name}`)
+            logger?.warn(`Skipping incomplete squid: ${squid.service_name}`)
             return null
           }
         })
@@ -151,7 +155,7 @@ export async function createSubsquidComponent({
       // Filter out null values
       return results.filter((squid): squid is Squid => squid !== null)
     } catch (error) {
-      console.error('Error listing services:', error)
+      logger?.error('Error listing services:', { error: String(error) })
       return []
     }
   }
@@ -164,9 +168,9 @@ export async function createSubsquidComponent({
         desiredCount: 0
       })
       await client.send(updateServiceCommand)
-      console.log(`Service ${serviceName} stopped!`)
+      logger?.info(`Service ${serviceName} stopped!`)
     } catch (error) {
-      console.log('error: ', error)
+      logger?.error('Error stopping service:', { error: String(error), service: serviceName })
     }
   }
 
@@ -177,7 +181,7 @@ export async function createSubsquidComponent({
 
     // NOTE: in the future, depending on the project we might want to run the promote query in a different db
     await dappsDatabase.query(promoteQuery)
-    console.log(`The ${serviceName} was promoted and the active schema is ${schemaName}`) // @TODO implement a proper response
+    logger?.info(`The ${serviceName} was promoted and the active schema is ${schemaName}`)
   }
 
   return {

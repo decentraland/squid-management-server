@@ -52,7 +52,7 @@ async function initComponents(): Promise<TestComponents> {
     dappsDatabase,
     config
   })
-  const slack = await createSlackComponent({ config })
+  const slack = await createSlackComponent({ config, logs })
   const squidMonitorJob = await createSquidMonitorJob({ config, logs, squids, slack })
 
   return {
