@@ -289,7 +289,7 @@ export async function createSquidMonitorJob(
     }
   }
 
-  return createJobComponent(components, monitorSquids, ONE_MINUTE, {
+  return createJobComponent(components, IS_PRODUCTION ? monitorSquids : () => Promise.resolve(), ONE_MINUTE, {
     repeat: true,
     startupDelay: 0,
     onError: error => {
