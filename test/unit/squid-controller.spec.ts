@@ -19,6 +19,13 @@ describe('createSubsquidComponent', () => {
     fetchMock = { fetch: jest.fn() } as IFetchComponent
     dappsDatabaseMock = { query: jest.fn() } as unknown as IPgComponent
     configMock = { requireString: jest.fn().mockResolvedValue('test-cluster') } as unknown as IConfigComponent
+    logsMock = {
+      getLogger: jest.fn().mockReturnValue({
+        info: jest.fn(),
+        error: jest.fn(),
+        warn: jest.fn()
+      })
+    } as unknown as ILoggerComponent
 
     ecsClientMock = new ECSClient({ region: 'us-east-1' })
     ;(ECSClient as jest.Mock).mockImplementation(() => ecsClientMock)

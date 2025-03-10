@@ -134,11 +134,11 @@ export async function createSubsquidComponent({
                   }
                   squid.metrics[networkName] = metrics
                 } else {
-                  logger?.error(`Failed to fetch metrics for network ${getSquidsNetworksMapping()[index].name}:`, result.reason)
+                  logger.error(`Failed to fetch metrics for network ${getSquidsNetworksMapping()[index].name}:`, result.reason)
                 }
               })
             } catch (error) {
-              logger?.error(`Failed to fetch metrics for ${ip}:`, { error: String(error) })
+              logger.error(`Failed to fetch metrics for ${ip}:`, { error: String(error) })
             }
           }
 
@@ -146,7 +146,7 @@ export async function createSubsquidComponent({
           if (squid.created_at && squid.health_status && squid.service_status) {
             return squid as Squid
           } else {
-            logger?.warn(`Skipping incomplete squid: ${squid.service_name}`)
+            logger.warn(`Skipping incomplete squid: ${squid.service_name}`)
             return null
           }
         })
@@ -155,7 +155,7 @@ export async function createSubsquidComponent({
       // Filter out null values
       return results.filter((squid): squid is Squid => squid !== null)
     } catch (error) {
-      logger?.error('Error listing services:', { error: String(error) })
+      logger.error('Error listing services:', { error: String(error) })
       return []
     }
   }
@@ -168,9 +168,9 @@ export async function createSubsquidComponent({
         desiredCount: 0
       })
       await client.send(updateServiceCommand)
-      logger?.info(`Service ${serviceName} stopped!`)
+      logger.info(`Service ${serviceName} stopped!`)
     } catch (error) {
-      logger?.error('Error stopping service:', { error: String(error), service: serviceName })
+      logger.error('Error stopping service:', { error: String(error), service: serviceName })
     }
   }
 
@@ -181,7 +181,7 @@ export async function createSubsquidComponent({
 
     // NOTE: in the future, depending on the project we might want to run the promote query in a different db
     await dappsDatabase.query(promoteQuery)
-    logger?.info(`The ${serviceName} was promoted and the active schema is ${schemaName}`)
+    logger.info(`The ${serviceName} was promoted and the active schema is ${schemaName}`)
 
     // Call marketplace server to recreate triggers and refresh materialized view for marketplace or trades squids
     if (serviceName.includes('marketplace-squid-server') || serviceName.includes('trades-squid-server')) {
