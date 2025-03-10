@@ -16,9 +16,6 @@ describe('Squid Monitor', () => {
   let mockSquids: Squid[]
   let jobFunction: () => Promise<void>
 
-  // Save the original environment
-  const originalEnv = { ...process.env }
-
   beforeEach(() => {
     // Mock the logger
     loggerMock = {
@@ -143,9 +140,6 @@ describe('Squid Monitor', () => {
   })
 
   afterEach(() => {
-    // Restore the original environment
-    process.env = { ...originalEnv }
-
     // Clean all mocks
     jest.clearAllMocks()
   })
@@ -180,6 +174,7 @@ describe('Squid Monitor', () => {
 
   describe('monitorSquids', () => {
     beforeEach(async () => {
+      configMock.getString = jest.fn().mockResolvedValue('production')
       const components = { logs: logsMock, squids: squidsMock, config: configMock, slack: slackComponentMock }
       await createSquidMonitorJob(components)
     })

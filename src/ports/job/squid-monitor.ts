@@ -9,15 +9,13 @@ import { IJobComponent } from './types'
 const ONE_MINUTE = 60 * 1000
 export const ETA_CONSIDERED_OUT_OF_SYNC = 100
 
-// Environment detection
-const IS_PRODUCTION = process.env.NODE_ENV === 'production'
-const ENV_PREFIX = IS_PRODUCTION ? '[PRD]' : '[DEV]'
-const BASE_URL = IS_PRODUCTION ? 'https://decentraland.org/squid-management-ui' : 'https://decentraland.zone/squid-management-ui'
-
 export async function createSquidMonitorJob(
   components: Pick<AppComponents, 'logs' | 'squids' | 'config' | 'slack'>
 ): Promise<IJobComponent> {
   const { logs, squids, config, slack } = components
+  const IS_PRODUCTION = (await config.getString('NODE_ENV')) === 'production'
+  const ENV_PREFIX = IS_PRODUCTION ? '[PRD]' : '[DEV]'
+  const BASE_URL = IS_PRODUCTION ? 'https://decentraland.org/squid-management-ui' : 'https://decentraland.zone/squid-management-ui'
   const logger = logs.getLogger('squid-monitor')
 
   const MOCK_ENABLED = (await config.getString('USE_MOCK_SQUIDS')) === 'true' //  this is for testing locally
