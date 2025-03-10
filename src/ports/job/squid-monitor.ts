@@ -290,7 +290,7 @@ export async function createSquidMonitorJob(
   }
 
   return createJobComponent(components, IS_PRODUCTION ? monitorSquids : () => Promise.resolve(), ONE_MINUTE, {
-    repeat: true,
+    repeat: IS_PRODUCTION,
     startupDelay: 0,
     onError: error => {
       logger.error('❌ Error in squid monitor job:', { error: formatError(error) })
