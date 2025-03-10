@@ -9,6 +9,8 @@ import { createTracerComponent } from '@well-known-components/tracer-component'
 import { createFetchComponent } from '../src/adapters/fetch'
 import { metricDeclarations } from '../src/metrics'
 import { createPgComponent } from '../src/ports/db/component'
+import { createSquidMonitorJob } from '../src/ports/job/squid-monitor'
+import { createSlackComponent } from '../src/ports/slack'
 import { createSubsquidComponent } from '../src/ports/squids/component'
 import { main } from '../src/service'
 import { GlobalContext, TestComponents } from '../src/types'
@@ -48,8 +50,11 @@ async function initComponents(): Promise<TestComponents> {
   const squids = await createSubsquidComponent({
     fetch,
     dappsDatabase,
-    config
+    config,
+    logs
   })
+  const slack = await createSlackComponent({ config, logs })
+  const squidMonitorJob = await createSquidMonitorJob({ config, logs, squids, slack })
 
   return {
     config,
@@ -59,6 +64,8 @@ async function initComponents(): Promise<TestComponents> {
     fetch,
     dappsDatabase,
     metrics,
-    squids
+    squids,
+    slack,
+    squidMonitorJob
   }
 }

@@ -8,6 +8,8 @@ import type {
 } from '@well-known-components/interfaces'
 import { IPgComponent } from '@well-known-components/pg-component'
 import { metricDeclarations } from './metrics'
+import { IJobComponent } from './ports/job'
+import { ISlackComponent } from './ports/slack/component'
 import { ISquidComponent } from './ports/squids/types'
 
 export type GlobalContext = {
@@ -23,6 +25,8 @@ export type BaseComponents = {
   dappsDatabase: IPgComponent
   metrics: IMetricsComponent<keyof typeof metricDeclarations>
   squids: ISquidComponent
+  slack: ISlackComponent
+  squidMonitorJob: IJobComponent
 }
 
 // components used in runtime
