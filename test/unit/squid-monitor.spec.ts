@@ -171,7 +171,7 @@ describe('Squid Monitor', () => {
 
       // Verify that the correct options were passed
       expect(callArgs[3]).toEqual({
-        repeat: true,
+        repeat: false,
         startupDelay: 0,
         onError: expect.any(Function)
       })
