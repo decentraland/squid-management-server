@@ -1,5 +1,5 @@
 import { ECSClient, UpdateServiceCommand } from '@aws-sdk/client-ecs'
-import { IFetchComponent, IConfigComponent } from '@well-known-components/interfaces'
+import { IFetchComponent, IConfigComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { IPgComponent } from '@well-known-components/pg-component'
 import { createSubsquidComponent } from '../../src/ports/squids/component'
 import { getPromoteQuery } from '../../src/ports/squids/queries'
@@ -13,6 +13,7 @@ describe('createSubsquidComponent', () => {
   let configMock: IConfigComponent
   let ecsClientMock: ECSClient
   let UpdateServiceCommandMock: jest.Mock
+  let logsMock: ILoggerComponent
 
   beforeEach(() => {
     fetchMock = { fetch: jest.fn() } as IFetchComponent
@@ -64,7 +65,8 @@ describe('createSubsquidComponent', () => {
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
         dappsDatabase: dappsDatabaseMock,
-        config: configMock
+        config: configMock,
+        logs: logsMock
       })
 
       const result = await subsquid.list()
@@ -88,7 +90,8 @@ describe('createSubsquidComponent', () => {
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
         dappsDatabase: dappsDatabaseMock,
-        config: configMock
+        config: configMock,
+        logs: logsMock
       })
 
       await subsquid.promote('test-service-name')
@@ -112,7 +115,8 @@ describe('createSubsquidComponent', () => {
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
         dappsDatabase: dappsDatabaseMock,
-        config: configMock
+        config: configMock,
+        logs: logsMock
       })
 
       await subsquid.downgrade('test-service-name')
