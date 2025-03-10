@@ -50,7 +50,8 @@ async function initComponents(): Promise<TestComponents> {
   const squids = await createSubsquidComponent({
     fetch,
     dappsDatabase,
-    config
+    config,
+    logs
   })
   const slack = await createSlackComponent({ config, logs })
   const squidMonitorJob = await createSquidMonitorJob({ config, logs, squids, slack })

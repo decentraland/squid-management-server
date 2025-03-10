@@ -113,12 +113,48 @@ export async function createSquidMonitorJob(
     }
 
     for (const network of validNetworks) {
-      // Check if the network exists in the squid metrics
-      if (!(network in squid.metrics)) {
+      const metrics = squid.metrics[network as Network.ETHEREUM | Network.MATIC]
+      const squidDetailsUrl = `${BASE_URL}?squid=${squid.service_name}&network=${network}`
+      if (!metrics) {
+        logger.warn(`No metrics found for squid ${squid.service_name} on network ${network}`)
+        const noMetricsMessage: SlackMessage = {
+          text: `${ENV_PREFIX} ⚠️ ALERT: No metrics found for Squid '${squid.name}' on network ${network}`,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: `${ENV_PREFIX} ⚠️ ALERT: No metrics found`
+              }
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*🆔 ID:* ${squid.service_name}`
+              }
+            },
+            {
+              type: 'context',
+              elements: [
+                {
+                  type: 'mrkdwn',
+                  text: `*🕒 Date:* ${new Date().toLocaleString()}`
+                }
+              ]
+            },
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*⚙️ Please check the Squid status:* <${squidDetailsUrl}|View Details>`
+              }
+            }
+          ]
+        }
+        await slack.sendFormattedMessage(noMetricsMessage)
         continue
       }
-
-      const metrics = squid.metrics[network as Network.ETHEREUM | Network.MATIC]
 
       // For testing: force ETA to be undefined if environment variable is set
       if (FORCE_ETA_UNAVAILABLE && MOCK_ENABLED && network === Network.MATIC) {
