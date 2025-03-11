@@ -13,7 +13,7 @@ export async function createSquidMonitorJob(
   components: Pick<AppComponents, 'logs' | 'squids' | 'config' | 'slack'>
 ): Promise<IJobComponent> {
   const { logs, squids, config, slack } = components
-  const IS_PRODUCTION = (await config.getString('NODE_ENV')) === 'production'
+  const IS_PRODUCTION = (await config.getString('ENV')) === 'prd'
   const ENV_PREFIX = IS_PRODUCTION ? '[PRD]' : '[DEV]'
   const BASE_URL = IS_PRODUCTION ? 'https://decentraland.org/squid-management-ui' : 'https://decentraland.zone/squid-management-ui'
   const logger = logs.getLogger('squid-monitor')

@@ -43,7 +43,12 @@ describe('Squid Monitor', () => {
 
     // Mock the config component
     configMock = {
-      getString: jest.fn().mockResolvedValue('test-channel')
+      getString: jest.fn().mockImplementation((key: string) => {
+        if (key === 'ENV') {
+          return 'prd'
+        }
+        return 'false'
+      })
     } as unknown as IConfigComponent
 
     // Mock the job component
@@ -134,7 +139,7 @@ describe('Squid Monitor', () => {
     ]
 
     // Configure development environment for tests
-    process.env.NODE_ENV = 'development'
+    process.env.ENV = 'prd'
     process.env.USE_MOCK_SQUIDS = 'false'
     delete process.env.FORCE_ETA_UNAVAILABLE
   })
@@ -165,7 +170,7 @@ describe('Squid Monitor', () => {
 
       // Verify that the correct options were passed
       expect(callArgs[3]).toEqual({
-        repeat: false,
+        repeat: true,
         startupDelay: 0,
         onError: expect.any(Function)
       })
@@ -174,7 +179,6 @@ describe('Squid Monitor', () => {
 
   describe('monitorSquids', () => {
     beforeEach(async () => {
-      configMock.getString = jest.fn().mockResolvedValue('production')
       const components = { logs: logsMock, squids: squidsMock, config: configMock, slack: slackComponentMock }
       await createSquidMonitorJob(components)
     })
