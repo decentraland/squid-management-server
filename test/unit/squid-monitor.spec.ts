@@ -134,7 +134,7 @@ describe('Squid Monitor', () => {
     ]
 
     // Configure development environment for tests
-    process.env.NODE_ENV = 'development'
+    process.env.ENV = 'dev'
     process.env.USE_MOCK_SQUIDS = 'false'
     delete process.env.FORCE_ETA_UNAVAILABLE
   })

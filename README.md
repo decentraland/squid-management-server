@@ -30,7 +30,7 @@ SLACK_CHANNEL=alerts
 For local development and testing without AWS access, you can use the following environment variables:
 
 ```
-NODE_ENV=development
+ENV=development
 # or
 USE_MOCK_SQUIDS=true
 ```
