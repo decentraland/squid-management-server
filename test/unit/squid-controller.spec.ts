@@ -10,6 +10,7 @@ jest.mock('../../src/ports/squids/queries')
 describe('createSubsquidComponent', () => {
   let fetchMock: IFetchComponent
   let dappsDatabaseMock: IPgComponent
+  let creditsDatabaseMock: IPgComponent
   let configMock: IConfigComponent
   let ecsClientMock: ECSClient
   let UpdateServiceCommandMock: jest.Mock
@@ -18,6 +19,7 @@ describe('createSubsquidComponent', () => {
   beforeEach(() => {
     fetchMock = { fetch: jest.fn() } as IFetchComponent
     dappsDatabaseMock = { query: jest.fn() } as unknown as IPgComponent
+    creditsDatabaseMock = { query: jest.fn() } as unknown as IPgComponent
     configMock = { requireString: jest.fn().mockResolvedValue('test-cluster') } as unknown as IConfigComponent
     logsMock = {
       getLogger: jest.fn().mockReturnValue({
@@ -72,6 +74,7 @@ describe('createSubsquidComponent', () => {
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
         dappsDatabase: dappsDatabaseMock,
+        creditsDatabase: creditsDatabaseMock,
         config: configMock,
         logs: logsMock
       })
@@ -97,6 +100,7 @@ describe('createSubsquidComponent', () => {
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
         dappsDatabase: dappsDatabaseMock,
+        creditsDatabase: creditsDatabaseMock,
         config: configMock,
         logs: logsMock
       })
@@ -122,6 +126,7 @@ describe('createSubsquidComponent', () => {
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
         dappsDatabase: dappsDatabaseMock,
+        creditsDatabase: creditsDatabaseMock,
         config: configMock,
         logs: logsMock
       })

@@ -4,6 +4,7 @@ import { createDotEnvConfigComponent } from '@well-known-components/env-config-p
 import { createServerComponent } from '@well-known-components/http-server'
 import { createLogComponent } from '@well-known-components/logger'
 import { createMetricsComponent } from '@well-known-components/metrics'
+import { createPgComponent as createBasePgComponent } from '@well-known-components/pg-component'
 import { createRunner, createLocalFetchCompoment } from '@well-known-components/test-helpers'
 import { createTracerComponent } from '@well-known-components/tracer-component'
 import { createFetchComponent } from '../src/adapters/fetch'
@@ -47,9 +48,26 @@ async function initComponents(): Promise<TestComponents> {
       dbPrefix: 'DAPPS'
     }
   )
+
+  const creditsDbDatabaseName = await config.requireString('CREDITS_PG_COMPONENT_PSQL_DATABASE')
+  const dbUser = await config.requireString('DAPPS_PG_COMPONENT_PSQL_USER')
+  const dbPort = await config.requireString('DAPPS_PG_COMPONENT_PSQL_PORT')
+  const dbHost = await config.requireString('DAPPS_PG_COMPONENT_PSQL_HOST')
+  const dbPassword = await config.requireString('DAPPS_PG_COMPONENT_PSQL_PASSWORD')
+  const creditsDatabaseUrl = `postgres://${dbUser}:${dbPassword}@${dbHost}:${dbPort}/${creditsDbDatabaseName}`
+  const creditsDatabase = await createBasePgComponent(
+    { config, logs, metrics },
+    {
+      pool: {
+        connectionString: creditsDatabaseUrl
+      }
+    }
+  )
+
   const squids = await createSubsquidComponent({
     fetch,
     dappsDatabase,
+    creditsDatabase,
     config,
     logs
   })

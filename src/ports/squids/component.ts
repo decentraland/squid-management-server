@@ -19,17 +19,26 @@ const AWS_REGION = 'us-east-1'
 export async function createSubsquidComponent({
   fetch,
   dappsDatabase,
+  creditsDatabase,
   config,
   logs
 }: {
   fetch: IFetchComponent
   dappsDatabase: IPgComponent
+  creditsDatabase: IPgComponent
   config: IConfigComponent
   logs: ILoggerComponent
 }): Promise<ISquidComponent> {
   const logger = logs.getLogger('squids-component')
   const cluster = await config.requireString('AWS_CLUSTER_NAME')
   const client = new ECSClient({ region: AWS_REGION })
+
+  function getDatabaseFromServiceName(serviceName: string): IPgComponent {
+    if (serviceName.includes('credits-squid-server')) {
+      return creditsDatabase
+    }
+    return dappsDatabase
+  }
 
   async function list(): Promise<Squid[]> {
     try {
@@ -64,8 +73,9 @@ export async function createSubsquidComponent({
           const taskResponse = await client.send(listTasksCommand)
           const taskArns = taskResponse.taskArns || []
 
-          const schemaName = (await dappsDatabase.query(getSchemaByServiceNameQuery(serviceName))).rows[0]?.schema
-          const projectActiveSchema = (await dappsDatabase.query(getActiveSchemaQuery(serviceName))).rows[0]?.schema
+          const database = getDatabaseFromServiceName(serviceName)
+          const schemaName = (await database.query(getSchemaByServiceNameQuery(serviceName))).rows[0]?.schema
+          const projectActiveSchema = (await database.query(getActiveSchemaQuery(serviceName))).rows[0]?.schema
 
           const squid: Partial<Squid> = {
             name: serviceName,
@@ -179,8 +189,9 @@ export async function createSubsquidComponent({
     const schemaName = `squid_${projectName}` // e.g: squid_marketplace
     const promoteQuery = getPromoteQuery(serviceName, schemaName, projectName)
 
-    // NOTE: in the future, depending on the project we might want to run the promote query in a different db
-    await dappsDatabase.query(promoteQuery)
+    const database = getDatabaseFromServiceName(serviceName)
+    await database.query(promoteQuery)
+
     logger.info(`The ${serviceName} was promoted and the active schema is ${schemaName}`)
 
     // Call marketplace server to recreate triggers and refresh materialized view for marketplace or trades squids
