@@ -116,7 +116,7 @@ export async function createSubsquidComponent({
             // Fetch metrics for each network in parallel
             try {
               const metricsResults = await Promise.allSettled(
-                getSquidsNetworksMapping().map(async network => {
+                getSquidsNetworksMapping(serviceName).map(async network => {
                   const response = await fetch.fetch(`http://${ip}:${network.port}/metrics`)
                   const text = await response.text()
 
@@ -144,7 +144,7 @@ export async function createSubsquidComponent({
                   }
                   squid.metrics[networkName] = metrics
                 } else {
-                  logger.error(`Failed to fetch metrics for network ${getSquidsNetworksMapping()[index].name}:`, result.reason)
+                  logger.error(`Failed to fetch metrics for network ${getSquidsNetworksMapping(serviceName)[index].name}:`, result.reason)
                 }
               })
             } catch (error) {
