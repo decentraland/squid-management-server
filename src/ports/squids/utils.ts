@@ -8,10 +8,21 @@ export const getMetricValue = (metrics: string, metricName: string) => {
 
 export const getProjectNameFromService = (serviceName: string): string => serviceName.split('-squid-server-')[0]
 
-export function getSquidsNetworksMapping(): {
+export function getSquidsNetworksMapping(serviceName: string): {
   name: Network.ETHEREUM | Network.MATIC
   port: number
 }[] {
+  const projectName = getProjectNameFromService(serviceName)
+
+  if (projectName === 'credits') {
+    return [
+      {
+        name: Network.MATIC,
+        port: 3001
+      }
+    ]
+  }
+
   return [
     {
       name: Network.ETHEREUM,
