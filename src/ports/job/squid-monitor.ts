@@ -103,7 +103,10 @@ export async function createSquidMonitorJob(
 
   async function checkSquidSynchronization(squid: Squid) {
     // We only check ETHEREUM and MATIC networks which are the ones in the type
-    const validNetworks = [Network.ETHEREUM, Network.MATIC] as const
+    let validNetworks = [Network.ETHEREUM, Network.MATIC]
+    if (squid.service_name.includes('credits')) {
+      validNetworks = [Network.MATIC] as const
+    }
 
     // Only check active squids (schema_name === project_active_schema)
     if (squid.schema_name !== squid.project_active_schema) {
