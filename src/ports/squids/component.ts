@@ -209,7 +209,7 @@ export async function createSubsquidComponent({
           return
         }
 
-        const response = await fetch.fetch(`${marketplaceServerUrl}/v1/trades/materialized-view/recreate`, {
+        const response = await fetch.fetch(`${marketplaceServerUrl}/trades/materialized-view/recreate`, {
           method: 'POST',
           headers: {
             'x-api-token': apiToken
