@@ -197,9 +197,9 @@ export async function createSubsquidComponent({
     // Call marketplace server to recreate triggers and refresh materialized view for marketplace or trades squids
     if (serviceName.includes('marketplace-squid-server') || serviceName.includes('trades-squid-server')) {
       try {
-        const marketplaceServerUrl = await config.getString('MARKETPLACE_SERVER_URL')
+        const marketplaceServerUrl = await config.getString('MARKETPLACE_API_URL')
         if (!marketplaceServerUrl) {
-          console.warn('MARKETPLACE_SERVER_URL not configured, skipping materialized view recreation')
+          console.warn('MARKETPLACE_API_URL not configured, skipping materialized view recreation')
           return
         }
 
