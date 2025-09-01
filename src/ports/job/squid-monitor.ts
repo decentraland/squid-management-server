@@ -8,6 +8,15 @@ import { IJobComponent } from './types'
 
 const ONE_MINUTE = 60 * 1000
 export const ETA_CONSIDERED_OUT_OF_SYNC = 100
+export const FIVE_MINUTES = 5 * 60 * 1000
+
+// State to track when "no metrics" issues were first detected for throttling alerts
+export const noMetricsFirstDetected = new Map<string, number>()
+
+// Helper function to clear throttle state (mainly for testing)
+export function clearNoMetricsThrottleState(): void {
+  noMetricsFirstDetected.clear()
+}
 
 export async function createSquidMonitorJob(
   components: Pick<AppComponents, 'logs' | 'squids' | 'config' | 'slack'>
@@ -116,45 +125,73 @@ export async function createSquidMonitorJob(
     for (const network of validNetworks) {
       const metrics = squid.metrics[network as Network.ETHEREUM | Network.MATIC]
       const squidDetailsUrl = `${BASE_URL}?squid=${squid.service_name}&network=${network}`
+      const noMetricsKey = `${squid.service_name}-${network}-no-metrics`
+
       if (!metrics) {
         logger.warn(`No metrics found for squid ${squid.service_name} on network ${network}`)
-        const noMetricsMessage: SlackMessage = {
-          text: `${ENV_PREFIX} ⚠️ ALERT: No metrics found for Squid '${squid.name}' on network ${network}`,
-          blocks: [
-            {
-              type: 'header',
-              text: {
-                type: 'plain_text',
-                text: `${ENV_PREFIX} ⚠️ ALERT: No metrics found`
-              }
-            },
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `*🆔 ID:* ${squid.service_name}`
-              }
-            },
-            {
-              type: 'context',
-              elements: [
-                {
-                  type: 'mrkdwn',
-                  text: `*🕒 Date:* ${new Date().toLocaleString()}`
+
+        const now = Date.now()
+        const firstDetected = noMetricsFirstDetected.get(noMetricsKey)
+        if (!firstDetected) {
+          // First time detecting this issue, record the timestamp
+          noMetricsFirstDetected.set(noMetricsKey, now)
+          logger.info(`First detection of no metrics for ${squid.service_name} on ${network}. Will send alert after 5 minutes.`)
+        } else if (now - firstDetected >= FIVE_MINUTES) {
+          // Issue has persisted for 5 minutes, send the alert
+          const noMetricsMessage: SlackMessage = {
+            text: `${ENV_PREFIX} ⚠️ ALERT: No metrics found for Squid '${squid.name}' on network ${network}`,
+            blocks: [
+              {
+                type: 'header',
+                text: {
+                  type: 'plain_text',
+                  text: `${ENV_PREFIX} ⚠️ ALERT: No metrics found`
                 }
-              ]
-            },
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `*⚙️ Please check the Squid status:* <${squidDetailsUrl}|View Details>`
+              },
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: `*🆔 ID:* ${squid.service_name}`
+                }
+              },
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: `*⏰ Issue duration:* ${Math.round((now - firstDetected) / 60000)} minutes`
+                }
+              },
+              {
+                type: 'context',
+                elements: [
+                  {
+                    type: 'mrkdwn',
+                    text: `*🕒 Date:* ${new Date().toLocaleString()}`
+                  }
+                ]
+              },
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: `*⚙️ Please check the Squid status:* <${squidDetailsUrl}|View Details>`
+                }
               }
-            }
-          ]
+            ]
+          }
+          await slack.sendFormattedMessage(noMetricsMessage)
+
+          // Reset the timestamp to avoid spamming (will only send again after another 5 minutes)
+          noMetricsFirstDetected.set(noMetricsKey, now)
         }
-        await slack.sendFormattedMessage(noMetricsMessage)
         continue
+      } else {
+        // Metrics found, clear any stored "no metrics" detection for this squid+network
+        if (noMetricsFirstDetected.has(noMetricsKey)) {
+          noMetricsFirstDetected.delete(noMetricsKey)
+          logger.info(`Metrics recovered for ${squid.service_name} on ${network}. Clearing throttle state.`)
+        }
       }
 
       // For testing: force ETA to be undefined if environment variable is set

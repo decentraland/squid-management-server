@@ -1,15 +1,21 @@
 import { IConfigComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { Network } from '@dcl/schemas'
 import { createJobComponent } from '../../src/ports/job/component'
-import { createSquidMonitorJob, ETA_CONSIDERED_OUT_OF_SYNC } from '../../src/ports/job/squid-monitor'
+import {
+  createSquidMonitorJob,
+  ETA_CONSIDERED_OUT_OF_SYNC,
+  FIVE_MINUTES,
+  noMetricsFirstDetected,
+  clearNoMetricsThrottleState
+} from '../../src/ports/job/squid-monitor'
 import { ISlackComponent, SlackMessageBlock } from '../../src/ports/slack/component'
-import { ISquidComponent, Squid } from '../../src/ports/squids/types'
+import { ISquidComponent, Squid, SquidMetric } from '../../src/ports/squids/types'
 
 jest.mock('../../src/ports/job/component')
 
 describe('Squid Monitor', () => {
   let logsMock: ILoggerComponent
-  let loggerMock: { info: jest.Mock; error: jest.Mock }
+  let loggerMock: { info: jest.Mock; error: jest.Mock; warn: jest.Mock }
   let squidsMock: ISquidComponent
   let configMock: IConfigComponent
   let slackComponentMock: ISlackComponent
@@ -17,11 +23,15 @@ describe('Squid Monitor', () => {
   let jobFunction: () => Promise<void>
 
   beforeEach(() => {
+    // Clear throttle state before each test
+    clearNoMetricsThrottleState()
+
     // Mock the logger
     loggerMock = {
       info: jest.fn(),
-      error: jest.fn()
-    }
+      error: jest.fn(),
+      warn: jest.fn()
+    } as unknown as { info: jest.Mock; error: jest.Mock; warn: jest.Mock }
     logsMock = {
       getLogger: jest.fn().mockReturnValue(loggerMock)
     } as unknown as ILoggerComponent
@@ -87,6 +97,20 @@ describe('Squid Monitor', () => {
             sqd_processor_mapping_blocks_per_second: 7
           }
         }
+      },
+      {
+        name: 'Squid Without Metrics',
+        service_name: 'squid-without-metrics',
+        schema_name: 'active-schema',
+        project_active_schema: 'active-schema',
+        created_at: undefined,
+        health_status: undefined,
+        service_status: undefined,
+        version: 1,
+        metrics: {
+          [Network.ETHEREUM]: undefined,
+          [Network.MATIC]: undefined
+        } as unknown as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
       },
       {
         name: 'Out of Sync Squid',
@@ -219,7 +243,7 @@ describe('Squid Monitor', () => {
     describe('when squids have ETA > ETA_CONSIDERED_OUT_OF_SYNC seconds', () => {
       beforeEach(() => {
         // Configure the mock to return an out of sync squid
-        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[1]])
+        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[2]])
       })
 
       it('should send alerts for networks with ETA > ETA_CONSIDERED_OUT_OF_SYNC seconds', async () => {
@@ -256,7 +280,7 @@ describe('Squid Monitor', () => {
     describe('when squids have ETA <= 10 seconds', () => {
       beforeEach(() => {
         // Configure the mock to return a synchronized squid
-        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[2]])
+        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[3]])
       })
 
       it('should not send any alerts', async () => {
@@ -266,6 +290,137 @@ describe('Squid Monitor', () => {
         // Verify that no messages were sent
         // eslint-disable-next-line @typescript-eslint/unbound-method
         expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+      })
+    })
+
+    describe('when squids have no metrics - throttling behavior', () => {
+      beforeEach(() => {
+        // Configure the mock to return a squid without metrics
+        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[1]]) // Squid Without Metrics
+      })
+
+      it('should not send alert on first detection of no metrics', async () => {
+        // Execute the monitoring function
+        await jobFunction()
+
+        // Verify that no slack message was sent
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+
+        // Verify that the issue was logged
+        expect(loggerMock.warn).toHaveBeenCalledWith('No metrics found for squid squid-without-metrics on network ETHEREUM')
+        expect(loggerMock.warn).toHaveBeenCalledWith('No metrics found for squid squid-without-metrics on network MATIC')
+
+        // Verify that the first detection was logged
+        expect(loggerMock.info).toHaveBeenCalledWith(
+          'First detection of no metrics for squid-without-metrics on ETHEREUM. Will send alert after 5 minutes.'
+        )
+        expect(loggerMock.info).toHaveBeenCalledWith(
+          'First detection of no metrics for squid-without-metrics on MATIC. Will send alert after 5 minutes.'
+        )
+
+        // Verify that the state is stored
+        expect(noMetricsFirstDetected.size).toBe(2)
+        expect(noMetricsFirstDetected.has('squid-without-metrics-ETHEREUM-no-metrics')).toBe(true)
+        expect(noMetricsFirstDetected.has('squid-without-metrics-MATIC-no-metrics')).toBe(true)
+      })
+
+      it('should send alert after 5 minutes have passed', async () => {
+        const fiveMinutesAgo = Date.now() - FIVE_MINUTES - 1000 // Add extra 1 second to ensure we're past the threshold
+
+        // Simulate that the issue was first detected 5+ minutes ago
+        noMetricsFirstDetected.set('squid-without-metrics-ETHEREUM-no-metrics', fiveMinutesAgo)
+        noMetricsFirstDetected.set('squid-without-metrics-MATIC-no-metrics', fiveMinutesAgo)
+
+        // Execute the monitoring function
+        await jobFunction()
+
+        // Verify that slack messages were sent for both networks
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(slackComponentMock.sendFormattedMessage).toHaveBeenCalledTimes(2)
+
+        // Verify message content includes duration
+        const calls = (slackComponentMock.sendFormattedMessage as jest.Mock).mock.calls
+
+        // Check that both messages are for no metrics
+        const noMetricsCallEthereum = calls.find(
+          (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
+            call[0].text && call[0].text.includes('No metrics found') && call[0].text.includes('ETHEREUM')
+        )
+        expect(noMetricsCallEthereum).toBeTruthy()
+
+        const noMetricsCallMatic = calls.find(
+          (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
+            call[0].text && call[0].text.includes('No metrics found') && call[0].text.includes('MATIC')
+        )
+        expect(noMetricsCallMatic).toBeTruthy()
+
+        // Verify that the messages contain duration information
+        expect(
+          noMetricsCallEthereum &&
+            noMetricsCallEthereum[0].blocks?.some(
+              (block: SlackMessageBlock) =>
+                block.type === 'section' && block.text && block.text.text.includes('Issue duration:') && block.text.text.includes('minutes')
+            )
+        ).toBeTruthy()
+      })
+
+      it('should not send multiple alerts within 5 minutes after first alert', async () => {
+        const fiveMinutesAgo = Date.now() - FIVE_MINUTES - 1000
+
+        // Simulate that the issue was first detected 5+ minutes ago and alert was already sent
+        noMetricsFirstDetected.set('squid-without-metrics-ETHEREUM-no-metrics', fiveMinutesAgo)
+        noMetricsFirstDetected.set('squid-without-metrics-MATIC-no-metrics', fiveMinutesAgo)
+
+        // Execute monitoring (this should send alerts and reset timestamps)
+        await jobFunction()
+
+        // Clear the mock call history
+        ;(slackComponentMock.sendFormattedMessage as jest.Mock).mockClear()
+
+        // Execute monitoring again immediately (should not send alerts)
+        await jobFunction()
+
+        // Verify that no additional slack messages were sent
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+      })
+
+      it('should clear throttle state when metrics are recovered', async () => {
+        // First, establish that no metrics were detected
+        noMetricsFirstDetected.set('squid-without-metrics-ETHEREUM-no-metrics', Date.now())
+        noMetricsFirstDetected.set('squid-without-metrics-MATIC-no-metrics', Date.now())
+
+        // Now provide a squid with metrics
+        const squidWithRecoveredMetrics = {
+          ...mockSquids[1],
+          metrics: {
+            [Network.ETHEREUM]: {
+              sqd_processor_sync_eta_seconds: 5,
+              sqd_processor_last_block: 1000,
+              sqd_processor_chain_height: 1005,
+              sqd_processor_mapping_blocks_per_second: 10
+            },
+            [Network.MATIC]: {
+              sqd_processor_sync_eta_seconds: 3,
+              sqd_processor_last_block: 2000,
+              sqd_processor_chain_height: 2002,
+              sqd_processor_mapping_blocks_per_second: 15
+            }
+          }
+        }
+
+        squidsMock.list = jest.fn().mockResolvedValue([squidWithRecoveredMetrics])
+
+        // Execute the monitoring function
+        await jobFunction()
+
+        // Verify that the throttle state was cleared
+        expect(noMetricsFirstDetected.size).toBe(0)
+
+        // Verify that recovery was logged
+        expect(loggerMock.info).toHaveBeenCalledWith('Metrics recovered for squid-without-metrics on ETHEREUM. Clearing throttle state.')
+        expect(loggerMock.info).toHaveBeenCalledWith('Metrics recovered for squid-without-metrics on MATIC. Clearing throttle state.')
       })
     })
   })
