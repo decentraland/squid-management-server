@@ -6,7 +6,9 @@ import {
   ETA_CONSIDERED_OUT_OF_SYNC,
   FIVE_MINUTES,
   noMetricsFirstDetected,
-  clearNoMetricsThrottleState
+  clearNoMetricsThrottleState,
+  outOfSyncFirstDetected,
+  clearOutOfSyncThrottleState
 } from '../../src/ports/job/squid-monitor'
 import { ISlackComponent, SlackMessageBlock } from '../../src/ports/slack/component'
 import { ISquidComponent, Squid, SquidMetric } from '../../src/ports/squids/types'
@@ -25,6 +27,7 @@ describe('Squid Monitor', () => {
   beforeEach(() => {
     // Clear throttle state before each test
     clearNoMetricsThrottleState()
+    clearOutOfSyncThrottleState()
 
     // Mock the logger
     loggerMock = {
@@ -240,40 +243,127 @@ describe('Squid Monitor', () => {
       })
     })
 
-    describe('when squids have ETA > ETA_CONSIDERED_OUT_OF_SYNC seconds', () => {
+    describe('when squids have ETA > ETA_CONSIDERED_OUT_OF_SYNC seconds - throttling behavior', () => {
       beforeEach(() => {
         // Configure the mock to return an out of sync squid
         squidsMock.list = jest.fn().mockResolvedValue([mockSquids[2]])
       })
 
-      it('should send alerts for networks with ETA > ETA_CONSIDERED_OUT_OF_SYNC seconds', async () => {
+      it('should not send alert on first detection of out of sync', async () => {
         // Execute the monitoring function
         await jobFunction()
 
-        // Verify that sendFormattedMessage was called for the out of sync squid (only on Ethereum)
+        // Verify that no slack message was sent
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+
+        // Verify that the first detection was logged
+        expect(loggerMock.info).toHaveBeenCalledWith(
+          'First detection of out of sync for out-of-sync-squid on ETHEREUM. Will send alert after 5 minutes.'
+        )
+
+        // Verify that the state is stored
+        expect(outOfSyncFirstDetected.size).toBe(1)
+        expect(outOfSyncFirstDetected.has('out-of-sync-squid-ETHEREUM-out-of-sync')).toBe(true)
+      })
+
+      it('should send alert after 5 minutes have passed', async () => {
+        const fiveMinutesAgo = Date.now() - FIVE_MINUTES - 1000 // Add extra 1 second to ensure we're past the threshold
+
+        // Simulate that the issue was first detected 5+ minutes ago
+        outOfSyncFirstDetected.set('out-of-sync-squid-ETHEREUM-out-of-sync', fiveMinutesAgo)
+
+        // Execute the monitoring function
+        await jobFunction()
+
+        // Verify that slack message was sent for Ethereum network
         // eslint-disable-next-line @typescript-eslint/unbound-method
         expect(slackComponentMock.sendFormattedMessage).toHaveBeenCalledTimes(1)
 
-        // Verify that the messages contain the correct information for desynchronization
+        // Verify message content
         const calls = (slackComponentMock.sendFormattedMessage as jest.Mock).mock.calls
 
-        // Verify that the message is for desynchronization on Ethereum
-        const desyncCall = calls.find(
+        // Check that the message is for out of sync
+        const outOfSyncCall = calls.find(
           (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
             call[0].text && call[0].text.includes('out of sync') && call[0].text.includes('ETHEREUM')
         )
-        expect(desyncCall).toBeTruthy()
+        expect(outOfSyncCall).toBeTruthy()
 
-        // Verify that the message contains the correct information
+        // Verify that the message contains the correct ETA information
         expect(
-          desyncCall &&
-            desyncCall[0].blocks?.some(
+          outOfSyncCall &&
+            outOfSyncCall[0].blocks?.some(
               (block: SlackMessageBlock) =>
                 block.type === 'section' &&
                 block.fields &&
-                block.fields.some(field => field.text.includes('Current ETA') && field.text.includes('5 seconds'))
+                block.fields.some(field => field.text.includes('Current ETA') && field.text.includes('105 seconds'))
             )
         ).toBeTruthy()
+
+        // Verify that the message contains duration information
+        expect(
+          outOfSyncCall &&
+            outOfSyncCall[0].blocks?.some(
+              (block: SlackMessageBlock) =>
+                block.type === 'section' && block.text && block.text.text.includes('Issue duration:') && block.text.text.includes('minutes')
+            )
+        ).toBeTruthy()
+      })
+
+      it('should not send multiple alerts within 5 minutes after first alert', async () => {
+        const fiveMinutesAgo = Date.now() - FIVE_MINUTES - 1000
+
+        // Simulate that the issue was first detected 5+ minutes ago and alert was already sent
+        outOfSyncFirstDetected.set('out-of-sync-squid-ETHEREUM-out-of-sync', fiveMinutesAgo)
+
+        // Execute monitoring (this should send alert and reset timestamp)
+        await jobFunction()
+
+        // Clear the mock call history
+        ;(slackComponentMock.sendFormattedMessage as jest.Mock).mockClear()
+
+        // Execute monitoring again immediately (should not send alert)
+        await jobFunction()
+
+        // Verify that no additional slack messages were sent
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+      })
+
+      it('should clear throttle state when squid comes back in sync', async () => {
+        // First, establish that out of sync was detected
+        outOfSyncFirstDetected.set('out-of-sync-squid-ETHEREUM-out-of-sync', Date.now())
+
+        // Now provide a squid that is back in sync
+        const squidBackInSync = {
+          ...mockSquids[2],
+          metrics: {
+            [Network.ETHEREUM]: {
+              sqd_processor_sync_eta_seconds: 5, // Now in sync
+              sqd_processor_last_block: 1000,
+              sqd_processor_chain_height: 1020,
+              sqd_processor_mapping_blocks_per_second: 8
+            },
+            [Network.MATIC]: {
+              sqd_processor_sync_eta_seconds: 5,
+              sqd_processor_last_block: 2000,
+              sqd_processor_chain_height: 2005,
+              sqd_processor_mapping_blocks_per_second: 12
+            }
+          }
+        }
+
+        squidsMock.list = jest.fn().mockResolvedValue([squidBackInSync])
+
+        // Execute the monitoring function
+        await jobFunction()
+
+        // Verify that the throttle state was cleared
+        expect(outOfSyncFirstDetected.has('out-of-sync-squid-ETHEREUM-out-of-sync')).toBe(false)
+
+        // Verify that recovery was logged
+        expect(loggerMock.info).toHaveBeenCalledWith('Squid out-of-sync-squid on ETHEREUM is back in sync. Clearing throttle state.')
       })
     })
 
