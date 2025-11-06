@@ -104,6 +104,14 @@ export async function createSubsquidComponent({
             squid.health_status = task.healthStatus
             squid.service_status = task.lastStatus
 
+            // Extract image URI from the task definition containers
+            // Look for the main container (usually the first one or the one with squid in the name)
+            const mainContainer = task.containers?.find(container => container.name?.includes('squid')) || task.containers?.[0]
+
+            if (mainContainer?.image) {
+              squid.image_uri = mainContainer.image
+            }
+
             const ElasticNetworkInterface = 'ElasticNetworkInterface'
             const privateIPv4Address = 'privateIPv4Address'
 

@@ -17,6 +17,7 @@ export type Squid = {
   health_status: HealthStatus | undefined
   service_status: string | undefined
   version: number
+  image_uri?: string
   metrics: Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
 }
 
