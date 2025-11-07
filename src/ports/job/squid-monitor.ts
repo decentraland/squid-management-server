@@ -13,9 +13,17 @@ export const FIVE_MINUTES = 5 * 60 * 1000
 // State to track when "no metrics" issues were first detected for throttling alerts
 export const noMetricsFirstDetected = new Map<string, number>()
 
+// State to track when "out of sync" issues were first detected for throttling alerts
+export const outOfSyncFirstDetected = new Map<string, number>()
+
 // Helper function to clear throttle state (mainly for testing)
 export function clearNoMetricsThrottleState(): void {
   noMetricsFirstDetected.clear()
+}
+
+// Helper function to clear out of sync throttle state (mainly for testing)
+export function clearOutOfSyncThrottleState(): void {
+  outOfSyncFirstDetected.clear()
 }
 
 export async function createSquidMonitorJob(
@@ -260,69 +268,96 @@ export async function createSquidMonitorJob(
       // Check if ETA is greater than 100 seconds
       if (metrics.sqd_processor_sync_eta_seconds > ETA_CONSIDERED_OUT_OF_SYNC) {
         const squidDetailsUrl = `${BASE_URL}?squid=${squid.service_name}&network=${network}`
+        const outOfSyncKey = `${squid.service_name}-${network}-out-of-sync`
 
-        const desyncMessage: SlackMessage = {
-          text: `${ENV_PREFIX} ⚠️ ALERT: Squid '${squid.name}' on network ${network} is out of sync`,
-          blocks: [
-            {
-              type: 'header',
-              text: {
-                type: 'plain_text',
-                text: `${ENV_PREFIX} ⚠️ ALERT: Squid out of sync`
-              }
-            },
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `🔄 Squid *${squid.name}* on network *${network}* is out of sync`
-              }
-            },
-            {
-              type: 'section',
-              fields: [
-                {
-                  type: 'mrkdwn',
-                  text: `*🆔 ID:* ${squid.service_name}`
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*📊 Schema:* ${squid.schema_name}`
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*⏱️ Current ETA:* ${metrics.sqd_processor_sync_eta_seconds} seconds`
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*📦 Last block:* ${metrics.sqd_processor_last_block}`
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*⛓️ Chain height:* ${metrics.sqd_processor_chain_height}`
+        const now = Date.now()
+        const firstDetected = outOfSyncFirstDetected.get(outOfSyncKey)
+        if (!firstDetected) {
+          // First time detecting this issue, record the timestamp
+          outOfSyncFirstDetected.set(outOfSyncKey, now)
+          logger.info(`First detection of out of sync for ${squid.service_name} on ${network}. Will send alert after 5 minutes.`)
+        } else if (now - firstDetected >= FIVE_MINUTES) {
+          // Issue has persisted for 5 minutes, send the alert
+          const desyncMessage: SlackMessage = {
+            text: `${ENV_PREFIX} ⚠️ ALERT: Squid '${squid.name}' on network ${network} is out of sync`,
+            blocks: [
+              {
+                type: 'header',
+                text: {
+                  type: 'plain_text',
+                  text: `${ENV_PREFIX} ⚠️ ALERT: Squid out of sync`
                 }
-              ]
-            },
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: `*🛠️ Actions:* <${squidDetailsUrl}|View Details>`
-              }
-            },
-            {
-              type: 'context',
-              elements: [
-                {
+              },
+              {
+                type: 'section',
+                text: {
                   type: 'mrkdwn',
-                  text: `*🕒 Date:* ${new Date().toLocaleString()}`
+                  text: `🔄 Squid *${squid.name}* on network *${network}* is out of sync`
                 }
-              ]
-            }
-          ]
+              },
+              {
+                type: 'section',
+                fields: [
+                  {
+                    type: 'mrkdwn',
+                    text: `*🆔 ID:* ${squid.service_name}`
+                  },
+                  {
+                    type: 'mrkdwn',
+                    text: `*📊 Schema:* ${squid.schema_name}`
+                  },
+                  {
+                    type: 'mrkdwn',
+                    text: `*⏱️ Current ETA:* ${metrics.sqd_processor_sync_eta_seconds} seconds`
+                  },
+                  {
+                    type: 'mrkdwn',
+                    text: `*📦 Last block:* ${metrics.sqd_processor_last_block}`
+                  },
+                  {
+                    type: 'mrkdwn',
+                    text: `*⛓️ Chain height:* ${metrics.sqd_processor_chain_height}`
+                  }
+                ]
+              },
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: `*⏰ Issue duration:* ${Math.round((now - firstDetected) / 60000)} minutes`
+                }
+              },
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: `*🛠️ Actions:* <${squidDetailsUrl}|View Details>`
+                }
+              },
+              {
+                type: 'context',
+                elements: [
+                  {
+                    type: 'mrkdwn',
+                    text: `*🕒 Date:* ${new Date().toLocaleString()}`
+                  }
+                ]
+              }
+            ]
+          }
+
+          await slack.sendFormattedMessage(desyncMessage)
+
+          // Reset the timestamp to avoid spamming (will only send again after another 5 minutes)
+          outOfSyncFirstDetected.set(outOfSyncKey, now)
         }
-
-        await slack.sendFormattedMessage(desyncMessage)
+      } else {
+        // ETA is acceptable, clear any stored "out of sync" detection for this squid+network
+        const outOfSyncKey = `${squid.service_name}-${network}-out-of-sync`
+        if (outOfSyncFirstDetected.has(outOfSyncKey)) {
+          outOfSyncFirstDetected.delete(outOfSyncKey)
+          logger.info(`Squid ${squid.service_name} on ${network} is back in sync. Clearing throttle state.`)
+        }
       }
     }
   }
