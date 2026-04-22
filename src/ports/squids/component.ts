@@ -8,10 +8,12 @@ import {
   UpdateServiceCommand
 } from '@aws-sdk/client-ecs'
 import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
+import { PoolClient } from 'pg'
+import { SQL } from 'sql-template-strings'
 import { IPgComponent } from '@dcl/pg-component'
 import { Network } from '@dcl/schemas'
-import { getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
-import { ISquidComponent, Squid, SquidMetric } from './types'
+import { escapeIdentifier, getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
+import { DatabaseName, ISquidComponent, PurgeOptions, PurgeResult, PurgeSkipReason, Squid, SquidMetric } from './types'
 import { getMetricValue, getProjectNameFromService, getSquidsNetworksMapping } from './utils'
 
 const AWS_REGION = 'us-east-1'
@@ -237,9 +239,147 @@ export async function createSubsquidComponent({
     }
   }
 
+  // Schema names we create always match this shape; gate every DROP behind the same pattern.
+  const SAFE_SCHEMA_NAME = /^squid_[a-zA-Z0-9_]+$/
+
+  async function purgeSchemasInDatabase(
+    databaseName: DatabaseName,
+    database: IPgComponent,
+    runningServiceNames: string[],
+    olderThanMs: number,
+    dryRun: boolean
+  ): Promise<PurgeResult> {
+    const deleted: PurgeResult['deleted'] = []
+    const skipped: PurgeResult['skipped'] = []
+
+    const { rows: existing } = await database.query<{ schema_name: string }>(
+      SQL`SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'squid_%'`
+    )
+    if (existing.length === 0) return { deleted, skipped }
+
+    const schemaNames = existing.map(row => row.schema_name)
+    const { rows: ageRows } = await database.query<{ schema: string; max_created_at: Date }>(
+      SQL`SELECT schema, MAX(created_at) AS max_created_at FROM public.indexers WHERE schema = ANY(${schemaNames}) GROUP BY schema`
+    )
+    const schemaAges = new Map(ageRows.map(row => [row.schema, new Date(row.max_created_at).getTime()]))
+
+    const { rows: activeRows } = await database.query<{ schema: string }>(SQL`SELECT schema FROM public.squids`)
+    const activeSchemas = new Set(activeRows.filter(row => row.schema).map(row => row.schema))
+
+    const runningServiceSchemas = new Set<string>()
+    for (const serviceName of runningServiceNames) {
+      const { rows } = await database.query<{ schema: string }>(
+        SQL`SELECT schema FROM public.indexers WHERE service = ${serviceName} ORDER BY created_at DESC LIMIT 1`
+      )
+      const latest = rows[0]?.schema
+      if (latest) runningServiceSchemas.add(latest)
+    }
+
+    const now = Date.now()
+    for (const schema of schemaNames) {
+      const createdAt = schemaAges.get(schema)
+      if (createdAt === undefined) {
+        // We didn't create it (no indexers row) — leave it alone entirely, don't even report.
+        continue
+      }
+      const ageMs = now - createdAt
+      if (ageMs < olderThanMs) continue
+
+      const entry = { database: databaseName, schema, ageMs }
+      const reason: PurgeSkipReason | undefined = activeSchemas.has(schema)
+        ? 'active'
+        : runningServiceSchemas.has(schema)
+          ? 'running-service'
+          : !SAFE_SCHEMA_NAME.test(schema)
+            ? 'invalid-name'
+            : undefined
+
+      if (reason) {
+        skipped.push({ ...entry, reason })
+        continue
+      }
+
+      if (!dryRun) {
+        await database.withTransaction(async (pgClient: PoolClient) => {
+          await pgClient.query(`DROP SCHEMA ${escapeIdentifier(schema)} CASCADE`)
+          await pgClient.query(SQL`DELETE FROM public.indexers WHERE schema = ${schema}`)
+        })
+      }
+      deleted.push(entry)
+    }
+
+    return { deleted, skipped }
+  }
+
+  // Minimal ECS query used by the purge: we only need the names of services that currently have a task.
+  // list() does the same plus describes tasks + fetches metrics, which is too heavy here.
+  async function getRunningSquidServiceNames(): Promise<string[]> {
+    const { serviceArns = [] } = await client.send(new ListServicesCommand({ cluster, maxResults: 100 }))
+    const squidArns = serviceArns.filter(arn => arn.includes('-squid-server'))
+    if (squidArns.length === 0) return []
+
+    const { services = [] } = await client.send(new DescribeServicesCommand({ cluster, services: squidArns }))
+
+    const running: string[] = []
+    await Promise.all(
+      services.map(async svc => {
+        const serviceName = svc.serviceName
+        if (!serviceName) return
+        const { taskArns = [] } = await client.send(new ListTasksCommand({ cluster, serviceName }))
+        if (taskArns.length > 0) running.push(serviceName)
+      })
+    )
+    return running
+  }
+
+  async function purgeOldSchemas({ olderThanMs, dryRun = false }: PurgeOptions): Promise<PurgeResult> {
+    if (olderThanMs <= 0) {
+      throw new Error(`purgeOldSchemas: olderThanMs must be positive (received ${olderThanMs})`)
+    }
+
+    // Safety rail: if we can't determine what is running, don't delete anything.
+    // An empty ECS response or a transient error must not be interpreted as "nothing is running".
+    let runningServiceNames: string[]
+    try {
+      runningServiceNames = await getRunningSquidServiceNames()
+    } catch (error) {
+      logger.warn('purgeOldSchemas: could not list running services — aborting as a safety measure', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return { deleted: [], skipped: [] }
+    }
+    if (runningServiceNames.length === 0) {
+      logger.warn('purgeOldSchemas: no running squid services detected — aborting as a safety measure')
+      return { deleted: [], skipped: [] }
+    }
+
+    const result: PurgeResult = { deleted: [], skipped: [] }
+
+    for (const [name, database] of [
+      ['dapps', dappsDatabase],
+      ['credits', creditsDatabase]
+    ] as const) {
+      try {
+        const partial = await purgeSchemasInDatabase(name, database, runningServiceNames, olderThanMs, dryRun)
+        result.deleted.push(...partial.deleted)
+        result.skipped.push(...partial.skipped)
+      } catch (error) {
+        logger.error(`purgeOldSchemas: failed while processing ${name} database`, {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+
+    logger.info(
+      `purgeOldSchemas ${dryRun ? '(dry-run) would delete' : 'deleted'} ${result.deleted.length} schema(s); skipped ${result.skipped.length}`
+    )
+    return result
+  }
+
   return {
     list,
     promote,
-    downgrade
+    downgrade,
+    purgeOldSchemas
   }
 }

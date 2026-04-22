@@ -27,6 +27,7 @@ export type BaseComponents = {
   squids: ISquidComponent
   slack: ISlackComponent
   squidMonitorJob: IJobComponent
+  schemaPurgeJob: IJobComponent
 }
 
 // components used in runtime

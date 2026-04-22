@@ -79,6 +79,34 @@ export async function initComponents(): Promise<AppComponents> {
     }
   })
 
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000
+  const FIVE_MINUTES_MS = 5 * 60 * 1000
+  const schemaPurgeLogger = logs.getLogger('schema-purge-job')
+  const schemaPurgeJob = createJobComponent(
+    { logs },
+    async () => {
+      const maxAgeDays = await config.getNumber('SCHEMA_PURGE_MAX_AGE_DAYS')
+      if (!maxAgeDays || maxAgeDays <= 0) {
+        schemaPurgeLogger.info('SCHEMA_PURGE_MAX_AGE_DAYS not configured; skipping schema purge')
+        return
+      }
+      const result = await squids.purgeOldSchemas({ olderThanMs: maxAgeDays * ONE_DAY_MS })
+      schemaPurgeLogger.info(`Schema purge: deleted ${result.deleted.length}, skipped ${result.skipped.length}`, {
+        deleted: JSON.stringify(result.deleted),
+        skipped: JSON.stringify(result.skipped)
+      })
+    },
+    ONE_DAY_MS,
+    {
+      repeat: true,
+      // Delay the first run so it doesn't race with the rest of startup.
+      startupDelay: FIVE_MINUTES_MS,
+      onError: error => {
+        schemaPurgeLogger.error('Schema purge job failed', { error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  )
+
   return {
     config,
     logs,
@@ -89,6 +117,7 @@ export async function initComponents(): Promise<AppComponents> {
     metrics,
     squids,
     slack,
-    squidMonitorJob
+    squidMonitorJob,
+    schemaPurgeJob
   }
 }

@@ -21,8 +21,31 @@ export type Squid = {
   metrics: Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
 }
 
+export type DatabaseName = 'dapps' | 'credits'
+
+export type PurgeOptions = {
+  /** Minimum age (in ms) a schema must have before it is considered for deletion. */
+  olderThanMs: number
+  /** When true, skip the DROP SCHEMA and only report what would happen. */
+  dryRun?: boolean
+}
+
+export type PurgedSchema = {
+  database: DatabaseName
+  schema: string
+  ageMs: number
+}
+
+export type PurgeSkipReason = 'active' | 'running-service' | 'no-age-info' | 'invalid-name'
+
+export type PurgeResult = {
+  deleted: PurgedSchema[]
+  skipped: Array<PurgedSchema & { reason: PurgeSkipReason }>
+}
+
 export type ISquidComponent = {
   list(): Promise<Squid[]>
   downgrade(serviceName: string): Promise<void>
   promote(serviceName: string): Promise<void>
+  purgeOldSchemas(options: PurgeOptions): Promise<PurgeResult>
 }

@@ -76,6 +76,7 @@ async function initComponents(): Promise<TestComponents> {
   const slack = createSlackComponent({ logs }, { token: slackToken })
   const monitorSquids = await createSquidMonitor({ config, logs, squids, slack })
   const squidMonitorJob = createJobComponent({ logs }, monitorSquids, 60 * 1000, { repeat: false })
+  const schemaPurgeJob = createJobComponent({ logs }, () => Promise.resolve(), 24 * 60 * 60 * 1000, { repeat: false })
 
   return {
     config,
@@ -87,6 +88,7 @@ async function initComponents(): Promise<TestComponents> {
     metrics,
     squids,
     slack,
-    squidMonitorJob
+    squidMonitorJob,
+    schemaPurgeJob
   }
 }
