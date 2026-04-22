@@ -1,4 +1,4 @@
-import { DescribeServicesCommand, ECSClient, ListServicesCommand, ListTasksCommand, UpdateServiceCommand } from '@aws-sdk/client-ecs'
+import { ECSClient, UpdateServiceCommand } from '@aws-sdk/client-ecs'
 import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { IPgComponent } from '@dcl/pg-component'
 import { createSubsquidComponent } from '../../src/ports/squids/component'
@@ -12,7 +12,13 @@ type MockDatabase = {
 }
 
 jest.mock('@aws-sdk/client-ecs')
-jest.mock('../../src/ports/squids/queries')
+jest.mock('../../src/ports/squids/queries', () => {
+  const actual = jest.requireActual<typeof import('../../src/ports/squids/queries')>('../../src/ports/squids/queries')
+  // Only getPromoteQuery is mocked (the promote test stubs its return value);
+  // everything else keeps its real implementation so the purge router can route
+  // based on the actual SQL text.
+  return { ...actual, getPromoteQuery: jest.fn() }
+})
 
 describe('createSubsquidComponent', () => {
   let fetchMock: IFetchComponent
@@ -188,7 +194,7 @@ describe('createSubsquidComponent', () => {
         if (text.includes('information_schema.schemata')) return { rows: responses.schemata ?? [] }
         if (text.includes('MAX(created_at)')) return { rows: responses.indexerAges ?? [] }
         if (text.includes('FROM public.squids')) return { rows: responses.activeSchemas ?? [] }
-        if (text.includes('FROM public.indexers WHERE service')) {
+        if (text.includes('public.indexers') && text.includes('WHERE service')) {
           const values = (sql as { values: unknown[] }).values ?? []
           const serviceName = String(values[0] ?? '')
           const schema = responses.latestBySvc?.[serviceName]
@@ -222,10 +228,7 @@ describe('createSubsquidComponent', () => {
       let result: PurgeResult
 
       beforeEach(async () => {
-        ;(ecsClientMock.send as jest.Mock).mockImplementation(async (cmd: unknown) => {
-          if (cmd instanceof ListServicesCommand) return { serviceArns: [] }
-          return {}
-        })
+        ;(ecsClientMock.send as jest.Mock).mockResolvedValueOnce({ serviceArns: [] })
 
         const subsquid = await buildComponent()
         result = await subsquid.purgeOldSchemas({ olderThanMs: OLDER_THAN_MS })
@@ -248,7 +251,7 @@ describe('createSubsquidComponent', () => {
       let result: PurgeResult
 
       beforeEach(async () => {
-        ;(ecsClientMock.send as jest.Mock).mockRejectedValue(new Error('ECS down'))
+        ;(ecsClientMock.send as jest.Mock).mockRejectedValueOnce(new Error('ECS down'))
 
         const subsquid = await buildComponent()
         result = await subsquid.purgeOldSchemas({ olderThanMs: OLDER_THAN_MS })
@@ -265,13 +268,10 @@ describe('createSubsquidComponent', () => {
 
     describe('when a service is running and the dapps database holds a mix of schema kinds', () => {
       beforeEach(() => {
-        ;(ecsClientMock.send as jest.Mock).mockImplementation(async (cmd: unknown) => {
-          if (cmd instanceof ListServicesCommand)
-            return { serviceArns: ['arn:aws:ecs:us-east-1::service/cluster/marketplace-squid-server-a'] }
-          if (cmd instanceof DescribeServicesCommand) return { services: [{ serviceName: 'marketplace-squid-server-a' }] }
-          if (cmd instanceof ListTasksCommand) return { taskArns: ['task-arn'] }
-          return {}
-        })
+        ;(ecsClientMock.send as jest.Mock)
+          .mockResolvedValueOnce({ serviceArns: ['arn:aws:ecs:us-east-1::service/cluster/marketplace-squid-server-a'] }) // ListServicesCommand
+          .mockResolvedValueOnce({ services: [{ serviceName: 'marketplace-squid-server-a' }] }) // DescribeServicesCommand
+          .mockResolvedValueOnce({ taskArns: ['task-arn'] }) // ListTasksCommand
 
         dappsMock.query = makeQueryRouter({
           schemata: [

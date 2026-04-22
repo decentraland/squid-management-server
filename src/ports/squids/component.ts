@@ -9,10 +9,18 @@ import {
 } from '@aws-sdk/client-ecs'
 import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { PoolClient } from 'pg'
-import { SQL } from 'sql-template-strings'
 import { IPgComponent } from '@dcl/pg-component'
 import { Network } from '@dcl/schemas'
-import { escapeIdentifier, getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
+import {
+  buildDropSchemaStatement,
+  getActiveSchemaQuery,
+  getActivelyPromotedSchemasQuery,
+  getDeleteIndexersBySchemaQuery,
+  getPromoteQuery,
+  getSchemaAgesQuery,
+  getSchemaByServiceNameQuery,
+  getSquidSchemasQuery
+} from './queries'
 import { DatabaseName, ISquidComponent, PurgeOptions, PurgeResult, PurgeSkipReason, Squid, SquidMetric } from './types'
 import { getMetricValue, getProjectNameFromService, getSquidsNetworksMapping } from './utils'
 
@@ -252,25 +260,19 @@ export async function createSubsquidComponent({
     const deleted: PurgeResult['deleted'] = []
     const skipped: PurgeResult['skipped'] = []
 
-    const { rows: existing } = await database.query<{ schema_name: string }>(
-      SQL`SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'squid_%'`
-    )
+    const { rows: existing } = await database.query<{ schema_name: string }>(getSquidSchemasQuery())
     if (existing.length === 0) return { deleted, skipped }
 
     const schemaNames = existing.map(row => row.schema_name)
-    const { rows: ageRows } = await database.query<{ schema: string; max_created_at: Date }>(
-      SQL`SELECT schema, MAX(created_at) AS max_created_at FROM public.indexers WHERE schema = ANY(${schemaNames}) GROUP BY schema`
-    )
+    const { rows: ageRows } = await database.query<{ schema: string; max_created_at: Date }>(getSchemaAgesQuery(schemaNames))
     const schemaAges = new Map(ageRows.map(row => [row.schema, new Date(row.max_created_at).getTime()]))
 
-    const { rows: activeRows } = await database.query<{ schema: string }>(SQL`SELECT schema FROM public.squids`)
+    const { rows: activeRows } = await database.query<{ schema: string }>(getActivelyPromotedSchemasQuery())
     const activeSchemas = new Set(activeRows.filter(row => row.schema).map(row => row.schema))
 
     const runningServiceSchemas = new Set<string>()
     for (const serviceName of runningServiceNames) {
-      const { rows } = await database.query<{ schema: string }>(
-        SQL`SELECT schema FROM public.indexers WHERE service = ${serviceName} ORDER BY created_at DESC LIMIT 1`
-      )
+      const { rows } = await database.query<{ schema: string }>(getSchemaByServiceNameQuery(serviceName))
       const latest = rows[0]?.schema
       if (latest) runningServiceSchemas.add(latest)
     }
@@ -301,8 +303,8 @@ export async function createSubsquidComponent({
 
       if (!dryRun) {
         await database.withTransaction(async (pgClient: PoolClient) => {
-          await pgClient.query(`DROP SCHEMA ${escapeIdentifier(schema)} CASCADE`)
-          await pgClient.query(SQL`DELETE FROM public.indexers WHERE schema = ${schema}`)
+          await pgClient.query(buildDropSchemaStatement(schema))
+          await pgClient.query(getDeleteIndexersBySchemaQuery(schema))
         })
       }
       deleted.push(entry)
