@@ -247,9 +247,33 @@ export async function createSubsquidComponent({
     }
   }
 
-  // Schema names we create always match this shape; gate every DROP behind the same pattern.
+  /**
+   * Allowed shape for any schema the purge is permitted to drop. Enforced
+   * immediately before each `DROP SCHEMA` so a malformed name that slipped
+   * through earlier filters can never reach the database.
+   */
   const SAFE_SCHEMA_NAME = /^squid_[a-zA-Z0-9_]+$/
 
+  /**
+   * Classifies and purges candidate schemas in a single database. The
+   * caller owns the `runningServiceNames` list so both databases can share
+   * the same ECS snapshot.
+   *
+   * For every `squid_*` schema found:
+   *   1. Look up its age via `MAX(indexers.created_at)`. Schemas without
+   *      an indexers row are silently ignored.
+   *   2. If the age is below `olderThanMs`, do nothing.
+   *   3. Otherwise, classify as one of: `active` (promoted), `running-
+   *      service` (latest deployment of a running ECS service),
+   *      `invalid-name` (failed the safety regex), or a drop candidate.
+   *   4. Drop candidates are DROPped + their indexers rows DELETEd inside
+   *      a per-schema transaction (so a failure can't leave orphan
+   *      history). When `dryRun` is true the drop is not executed but
+   *      the candidate is still reported under `deleted`.
+   *
+   * Per-schema failures are logged and the caller continues with the
+   * next schema; one broken DROP does not abort the whole run.
+   */
   async function purgeSchemasInDatabase(
     databaseName: DatabaseName,
     database: IPgComponent,
@@ -298,23 +322,45 @@ export async function createSubsquidComponent({
 
       if (reason) {
         skipped.push({ ...entry, reason })
+        logger.debug('Skipped schema', { database: databaseName, schema, reason, ageMs })
         continue
       }
 
-      if (!dryRun) {
+      if (dryRun) {
+        logger.info('(dry-run) Would drop schema', { database: databaseName, schema, ageMs })
+        deleted.push(entry)
+        continue
+      }
+
+      try {
         await database.withTransaction(async (pgClient: PoolClient) => {
           await pgClient.query(buildDropSchemaStatement(schema))
           await pgClient.query(getDeleteIndexersBySchemaQuery(schema))
         })
+        logger.info('Dropped schema', { database: databaseName, schema, ageMs })
+        deleted.push(entry)
+      } catch (error) {
+        logger.error('Failed to drop schema', {
+          database: databaseName,
+          schema,
+          ageMs,
+          error: error instanceof Error ? error.message : String(error)
+        })
       }
-      deleted.push(entry)
     }
 
     return { deleted, skipped }
   }
 
-  // Minimal ECS query used by the purge: we only need the names of services that currently have a task.
-  // list() does the same plus describes tasks + fetches metrics, which is too heavy here.
+  /**
+   * Minimal ECS lookup for the subset of squid services that currently
+   * have a running task. Used as the "don't touch" filter for the purge.
+   *
+   * `list()` could supply the same information, but it additionally
+   * describes every task and fetches Prometheus metrics over HTTP per
+   * network. That's expensive and unnecessary here, and it also makes
+   * the purge tests combinatorially harder to set up.
+   */
   async function getRunningSquidServiceNames(): Promise<string[]> {
     const { serviceArns = [] } = await client.send(new ListServicesCommand({ cluster, maxResults: 100 }))
     const squidArns = serviceArns.filter(arn => arn.includes('-squid-server'))
@@ -334,6 +380,20 @@ export async function createSubsquidComponent({
     return running
   }
 
+  /**
+   * Entry point for the schema purge. Enforces the safety rails
+   * documented on `ISquidComponent.purgeOldSchemas` and dispatches to
+   * `purgeSchemasInDatabase` for each of the two databases.
+   *
+   * Logging summary:
+   *   - `warn` — aborting because ECS couldn't be queried or returned no
+   *     running services.
+   *   - `error` — processing a whole database failed (transport-level,
+   *     not a single DROP) or a specific DROP threw.
+   *   - `info` — every drop (or would-drop, in dry-run) with schema,
+   *     database and age; and a final summary line with the totals.
+   *   - `debug` — every skip with the reason.
+   */
   async function purgeOldSchemas({ olderThanMs, dryRun = false }: PurgeOptions): Promise<PurgeResult> {
     if (olderThanMs <= 0) {
       throw new Error(`purgeOldSchemas: olderThanMs must be positive (received ${olderThanMs})`)

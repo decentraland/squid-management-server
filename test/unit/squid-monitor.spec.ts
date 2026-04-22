@@ -15,7 +15,7 @@ type SendMessageCall = [{ text: string; blocks?: SlackMessageBlock[] }]
 
 describe('Squid Monitor', () => {
   let logsMock: ILoggerComponent
-  let loggerMock: { info: jest.Mock; error: jest.Mock; warn: jest.Mock }
+  let loggerMock: { info: jest.Mock; error: jest.Mock; warn: jest.Mock; debug: jest.Mock }
   let squidsMock: ISquidComponent
   let configMock: IConfigComponent
   let slackComponentMock: ISlackComponent
@@ -27,7 +27,8 @@ describe('Squid Monitor', () => {
     loggerMock = {
       info: jest.fn(),
       error: jest.fn(),
-      warn: jest.fn()
+      warn: jest.fn(),
+      debug: jest.fn()
     }
     logsMock = {
       getLogger: jest.fn().mockReturnValue(loggerMock)
