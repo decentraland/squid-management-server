@@ -8,11 +8,11 @@ import { createServerComponent } from '@dcl/http-server'
 import { createJobComponent } from '@dcl/job-component'
 import { createMetricsComponent } from '@dcl/metrics'
 import { createPgComponent as createBasePgComponent } from '@dcl/pg-component'
+import { createSlackComponent } from '@dcl/slack-component'
 import { createTracedFetcherComponent } from '@dcl/traced-fetch-component'
 import { metricDeclarations } from '../src/metrics'
 import { createPgComponent } from '../src/ports/db/component'
 import { createSquidMonitor } from '../src/ports/job/squid-monitor'
-import { createSlackComponent } from '../src/ports/slack'
 import { createSubsquidComponent } from '../src/ports/squids/component'
 import { main } from '../src/service'
 import { GlobalContext, TestComponents } from '../src/types'
@@ -72,7 +72,8 @@ async function initComponents(): Promise<TestComponents> {
     config,
     logs
   })
-  const slack = await createSlackComponent({ config, logs })
+  const slackToken = await config.requireString('SLACK_BOT_TOKEN')
+  const slack = createSlackComponent({ logs }, { token: slackToken })
   const monitorSquids = await createSquidMonitor({ config, logs, squids, slack })
   const squidMonitorJob = createJobComponent({ logs }, monitorSquids, 60 * 1000, { repeat: false })
 

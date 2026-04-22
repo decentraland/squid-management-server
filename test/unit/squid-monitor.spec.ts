@@ -1,13 +1,14 @@
 import { IConfigComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { Network } from '@dcl/schemas'
+import { ISlackComponent } from '@dcl/slack-component'
 import {
   ETA_CONSIDERED_OUT_OF_SYNC,
   FIVE_MINUTES,
+  SlackMessageBlock,
   clearNoMetricsThrottleState,
   createSquidMonitor,
   noMetricsFirstDetected
 } from '../../src/ports/job/squid-monitor'
-import { ISlackComponent, SlackMessageBlock } from '../../src/ports/slack/component'
 import { ISquidComponent, Squid, SquidMetric } from '../../src/ports/squids/types'
 
 describe('Squid Monitor', () => {
@@ -42,7 +43,7 @@ describe('Squid Monitor', () => {
 
     // Mock the Slack component
     slackComponentMock = {
-      sendFormattedMessage: jest.fn()
+      sendMessage: jest.fn()
     }
 
     // Mock the config component
@@ -172,12 +173,12 @@ describe('Squid Monitor', () => {
         // Execute the monitoring function
         await monitorSquids()
 
-        // Verify that sendFormattedMessage was called for the squid without ETA (twice, once for each network)
+        // Verify that sendMessage was called for the squid without ETA (twice, once for each network)
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).toHaveBeenCalledTimes(2)
+        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(2)
 
         // Verify that the messages contain the correct information for unavailable ETA
-        const calls = (slackComponentMock.sendFormattedMessage as jest.Mock).mock.calls
+        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
 
         // Verify that at least one of the messages is for unavailable ETA on Ethereum
         const etaUnavailableEthereumCall = calls.find(
@@ -205,12 +206,12 @@ describe('Squid Monitor', () => {
         // Execute the monitoring function
         await monitorSquids()
 
-        // Verify that sendFormattedMessage was called for the out of sync squid (only on Ethereum)
+        // Verify that sendMessage was called for the out of sync squid (only on Ethereum)
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).toHaveBeenCalledTimes(1)
+        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(1)
 
         // Verify that the messages contain the correct information for desynchronization
-        const calls = (slackComponentMock.sendFormattedMessage as jest.Mock).mock.calls
+        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
 
         // Verify that the message is for desynchronization on Ethereum
         const desyncCall = calls.find(
@@ -244,7 +245,7 @@ describe('Squid Monitor', () => {
 
         // Verify that no messages were sent
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
       })
     })
 
@@ -260,7 +261,7 @@ describe('Squid Monitor', () => {
 
         // Verify that no slack message was sent
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
 
         // Verify that the issue was logged
         expect(loggerMock.warn).toHaveBeenCalledWith('No metrics found for squid squid-without-metrics on network ETHEREUM')
@@ -292,10 +293,10 @@ describe('Squid Monitor', () => {
 
         // Verify that slack messages were sent for both networks
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).toHaveBeenCalledTimes(2)
+        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(2)
 
         // Verify message content includes duration
-        const calls = (slackComponentMock.sendFormattedMessage as jest.Mock).mock.calls
+        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
 
         // Check that both messages are for no metrics
         const noMetricsCallEthereum = calls.find(
@@ -331,14 +332,14 @@ describe('Squid Monitor', () => {
         await monitorSquids()
 
         // Clear the mock call history
-        ;(slackComponentMock.sendFormattedMessage as jest.Mock).mockClear()
+        ;(slackComponentMock.sendMessage as jest.Mock).mockClear()
 
         // Execute monitoring again immediately (should not send alerts)
         await monitorSquids()
 
         // Verify that no additional slack messages were sent
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
       })
 
       it('should clear throttle state when metrics are recovered', async () => {

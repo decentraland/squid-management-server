@@ -5,11 +5,11 @@ import { createServerComponent, createStatusCheckComponent } from '@dcl/http-ser
 import { createJobComponent } from '@dcl/job-component'
 import { createMetricsComponent } from '@dcl/metrics'
 import { createPgComponent as createBasePgComponent } from '@dcl/pg-component'
+import { createSlackComponent } from '@dcl/slack-component'
 import { createTracedFetcherComponent } from '@dcl/traced-fetch-component'
 import { metricDeclarations } from './metrics'
 import { createPgComponent } from './ports/db/component'
 import { createSquidMonitor } from './ports/job/squid-monitor'
-import { createSlackComponent } from './ports/slack/component'
 import { createSubsquidComponent } from './ports/squids/component'
 import { AppComponents, GlobalContext } from './types'
 
@@ -65,10 +65,8 @@ export async function initComponents(): Promise<AppComponents> {
     logs
   })
 
-  const slack = await createSlackComponent({
-    config,
-    logs
-  })
+  const slackToken = await config.requireString('SLACK_BOT_TOKEN')
+  const slack = createSlackComponent({ logs }, { token: slackToken })
 
   const monitorSquids = await createSquidMonitor({ logs, squids, config, slack })
   const isProduction = (await config.getString('ENV')) === 'prd'

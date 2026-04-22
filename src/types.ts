@@ -8,8 +8,8 @@ import type {
 } from '@well-known-components/interfaces'
 import { IJobComponent } from '@dcl/job-component'
 import { IPgComponent } from '@dcl/pg-component'
+import { ISlackComponent } from '@dcl/slack-component'
 import { metricDeclarations } from './metrics'
-import { ISlackComponent } from './ports/slack/component'
 import { ISquidComponent } from './ports/squids/types'
 
 export type GlobalContext = {
