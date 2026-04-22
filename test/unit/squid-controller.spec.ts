@@ -225,6 +225,16 @@ describe('createSubsquidComponent', () => {
       oldDate = new Date(Date.now() - 10 * ONE_DAY_MS)
     })
 
+    describe('when olderThanMs is zero or negative', () => {
+      it('should throw before performing any ECS or database call', async () => {
+        const subsquid = await buildComponent()
+        await expect(subsquid.purgeOldSchemas({ olderThanMs: 0 })).rejects.toThrow('olderThanMs must be positive')
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(ecsClientMock.send).not.toHaveBeenCalled()
+        expect(dappsMock.query).not.toHaveBeenCalled()
+      })
+    })
+
     describe('when ECS reports no running squid services', () => {
       let result: PurgeResult
 
@@ -346,9 +356,98 @@ describe('createSubsquidComponent', () => {
           expect(result.deleted[0].schema).toBe('squid_old_orphan')
         })
 
+        it('should mark the result as dry-run so downstream consumers can tell', () => {
+          expect(result.dryRun).toBe(true)
+        })
+
         it('should not open any transaction on the dapps database', () => {
           expect(dappsMock.withTransaction).not.toHaveBeenCalled()
         })
+      })
+
+      describe('and the DROP for the orphan schema throws', () => {
+        let result: PurgeResult
+
+        beforeEach(async () => {
+          dappsMock.withTransaction.mockImplementationOnce(() => {
+            throw new Error('connection lost')
+          })
+
+          const subsquid = await buildComponent()
+          result = await subsquid.purgeOldSchemas({ olderThanMs: OLDER_THAN_MS })
+        })
+
+        it('should not list the failed schema under deleted', () => {
+          expect(result.deleted).toHaveLength(0)
+        })
+
+        it('should still have attempted the transaction', () => {
+          expect(dappsMock.withTransaction).toHaveBeenCalledTimes(1)
+        })
+
+        it('should keep the active and running-service skip reasons for the other candidates', () => {
+          expect(result.skipped).toContainEqual(expect.objectContaining({ schema: 'squid_active', reason: 'active' }))
+          expect(result.skipped).toContainEqual(expect.objectContaining({ schema: 'squid_running_latest', reason: 'running-service' }))
+        })
+      })
+    })
+
+    describe('when a candidate schema name fails the safety regex', () => {
+      let result: PurgeResult
+
+      beforeEach(async () => {
+        ;(ecsClientMock.send as jest.Mock)
+          .mockResolvedValueOnce({ serviceArns: ['arn:aws:ecs:us-east-1::service/cluster/marketplace-squid-server-a'] })
+          .mockResolvedValueOnce({ services: [{ serviceName: 'marketplace-squid-server-a' }] })
+          .mockResolvedValueOnce({ taskArns: ['task-arn'] })
+
+        dappsMock.query = makeQueryRouter({
+          schemata: [{ schema_name: 'squid_old-with-hyphen' }], // hyphen is disallowed by SAFE_SCHEMA_NAME
+          indexerAges: [{ schema: 'squid_old-with-hyphen', max_created_at: oldDate }]
+        })
+
+        const subsquid = await buildComponent()
+        result = await subsquid.purgeOldSchemas({ olderThanMs: OLDER_THAN_MS })
+      })
+
+      it('should report the schema as skipped with reason "invalid-name"', () => {
+        expect(result.skipped).toContainEqual(expect.objectContaining({ schema: 'squid_old-with-hyphen', reason: 'invalid-name' }))
+      })
+
+      it('should not delete the schema', () => {
+        expect(result.deleted).toHaveLength(0)
+      })
+
+      it('should not open any transaction on the dapps database', () => {
+        expect(dappsMock.withTransaction).not.toHaveBeenCalled()
+      })
+    })
+
+    describe('when the credits database also holds an old orphan schema', () => {
+      let result: PurgeResult
+
+      beforeEach(async () => {
+        ;(ecsClientMock.send as jest.Mock)
+          .mockResolvedValueOnce({ serviceArns: ['arn:aws:ecs:us-east-1::service/cluster/marketplace-squid-server-a'] })
+          .mockResolvedValueOnce({ services: [{ serviceName: 'marketplace-squid-server-a' }] })
+          .mockResolvedValueOnce({ taskArns: ['task-arn'] })
+
+        creditsMock.query = makeQueryRouter({
+          schemata: [{ schema_name: 'squid_credits_orphan' }],
+          indexerAges: [{ schema: 'squid_credits_orphan', max_created_at: oldDate }]
+        })
+
+        const subsquid = await buildComponent()
+        result = await subsquid.purgeOldSchemas({ olderThanMs: OLDER_THAN_MS })
+      })
+
+      it('should delete the orphan schema from the credits database', () => {
+        expect(result.deleted).toContainEqual(expect.objectContaining({ database: 'credits', schema: 'squid_credits_orphan' }))
+      })
+
+      it('should open the transaction on the credits database, not dapps', () => {
+        expect(creditsMock.withTransaction).toHaveBeenCalledTimes(1)
+        expect(dappsMock.withTransaction).not.toHaveBeenCalled()
       })
     })
   })
