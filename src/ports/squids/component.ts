@@ -288,8 +288,17 @@ export async function createSubsquidComponent({
     if (existing.length === 0) return { deleted, skipped }
 
     const schemaNames = existing.map(row => row.schema_name)
-    const { rows: ageRows } = await database.query<{ schema: string; max_created_at: Date }>(getSchemaAgesQuery(schemaNames))
-    const schemaAges = new Map(ageRows.map(row => [row.schema, new Date(row.max_created_at).getTime()]))
+    const { rows: ageRows } = await database.query<{ schema: string; max_created_at: Date | null }>(getSchemaAgesQuery(schemaNames))
+    // Defensive: if every `indexers.created_at` for a schema is NULL, `MAX`
+    // also returns NULL. Treating that as epoch (the default of `new Date(null)`)
+    // would make the schema look ~56 years old and trivially pass any
+    // threshold, so we skip it entirely — same safety posture as having no
+    // indexers row at all.
+    const schemaAges = new Map<string, number>()
+    for (const row of ageRows) {
+      if (row.max_created_at == null) continue
+      schemaAges.set(row.schema, new Date(row.max_created_at).getTime())
+    }
 
     const { rows: activeRows } = await database.query<{ schema: string }>(getActivelyPromotedSchemasQuery())
     const activeSchemas = new Set(activeRows.filter(row => row.schema).map(row => row.schema))
@@ -356,17 +365,39 @@ export async function createSubsquidComponent({
    * Minimal ECS lookup for the subset of squid services that currently
    * have a running task. Used as the "don't touch" filter for the purge.
    *
+   * Correctness notes (this list must be complete — anything missing
+   * becomes a deletion candidate):
+   *   - `ListServices` is paginated via `nextToken` so clusters larger
+   *     than one page of 100 services are still fully enumerated.
+   *   - `DescribeServices` accepts at most 10 service ARNs per call
+   *     (AWS hard limit), so we chunk the ARNs into groups of 10.
+   *
    * `list()` could supply the same information, but it additionally
    * describes every task and fetches Prometheus metrics over HTTP per
    * network. That's expensive and unnecessary here, and it also makes
    * the purge tests combinatorially harder to set up.
    */
   async function getRunningSquidServiceNames(): Promise<string[]> {
-    const { serviceArns = [] } = await client.send(new ListServicesCommand({ cluster, maxResults: 100 }))
-    const squidArns = serviceArns.filter(arn => arn.includes('-squid-server'))
+    const DESCRIBE_SERVICES_CHUNK_SIZE = 10
+
+    const squidArns: string[] = []
+    let nextToken: string | undefined
+    do {
+      const response = await client.send(new ListServicesCommand({ cluster, maxResults: 100, nextToken }))
+      for (const arn of response.serviceArns ?? []) {
+        if (arn.includes('-squid-server')) squidArns.push(arn)
+      }
+      nextToken = response.nextToken
+    } while (nextToken)
+
     if (squidArns.length === 0) return []
 
-    const { services = [] } = await client.send(new DescribeServicesCommand({ cluster, services: squidArns }))
+    const services: Array<{ serviceName?: string }> = []
+    for (let i = 0; i < squidArns.length; i += DESCRIBE_SERVICES_CHUNK_SIZE) {
+      const chunk = squidArns.slice(i, i + DESCRIBE_SERVICES_CHUNK_SIZE)
+      const response = await client.send(new DescribeServicesCommand({ cluster, services: chunk }))
+      services.push(...(response.services ?? []))
+    }
 
     const running: string[] = []
     await Promise.all(

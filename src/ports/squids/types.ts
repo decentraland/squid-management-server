@@ -97,6 +97,14 @@ export type ISquidComponent = {
    * - A failure dropping one schema is logged and the caller continues
    *   with the next schema.
    *
+   * Known limitation: the "currently running services" snapshot is taken
+   * once at the start of the sweep; individual `DROP` statements execute
+   * seconds later. A service that restarts mid-sweep (0 running tasks in
+   * the transient window) could have its not-yet-promoted schema fall
+   * off the don't-touch set. The odds of that colliding with the daily
+   * run are very low, and the `active` schema of each project is looked
+   * up separately as a second layer of protection.
+   *
    * @see PurgeOptions, PurgeResult
    */
   purgeOldSchemas(options: PurgeOptions): Promise<PurgeResult>

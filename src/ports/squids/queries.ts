@@ -117,11 +117,17 @@ export const getActiveSchemaQuery = (serviceName: string): SQLStatement => {
 /**
  * Lists every schema in the database whose name starts with `squid_`.
  * Used by the purge job to enumerate candidates before filtering by age and usage.
+ *
+ * Uses a POSIX regex (`~`) rather than `LIKE 'squid_%'` on purpose: in SQL
+ * `LIKE`, `_` is a single-character wildcard, so `'squid_%'` also matches e.g.
+ * `squida_foo`. The `SAFE_SCHEMA_NAME` regex in the component catches those as
+ * `invalid-name`, but narrowing the query itself avoids the wasted round-trip
+ * and removes an easy source of confusion.
  */
 export const getSquidSchemasQuery = (): SQLStatement => SQL`
   SELECT schema_name
   FROM information_schema.schemata
-  WHERE schema_name LIKE 'squid_%';
+  WHERE schema_name ~ '^squid_';
 `
 
 /**
