@@ -6,14 +6,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node --trace-warnings --abort-on-uncaught-exception --unhandled-rejections=strict dist/src/index.js",
+    "dry-run:purge": "npm run build && node dist/scripts/dry-run-purge.js",
     "start:watch": "nodemon src/index.ts",
-    "check:code": "eslint src test",
-    "check:prettier": "prettier -c '{src,test}/**/*.{js,ts,json,yml,md}'",
+    "check:code": "eslint src test scripts",
+    "check:prettier": "prettier -c '{src,test,scripts}/**/*.{js,ts,json,yml,md}'",
     "fix:code": "npm run check:code -- --fix",
     "fix:prettier": "npm run check:prettier -- --write",
     "test": "jest --forceExit --detectOpenHandles --coverage --verbose -c jest.config.json",
     "test:watch": "jest --watch --verbose -c jest.config.json",
-    "lint": "eslint src test"
+    "lint": "eslint src test scripts"
   },
   "keywords": [],
   "author": "",
