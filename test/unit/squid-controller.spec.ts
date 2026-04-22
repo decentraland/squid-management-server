@@ -236,7 +236,7 @@ describe('createSubsquidComponent', () => {
       })
 
       it('should return an empty deleted and skipped result', () => {
-        expect(result).toEqual({ deleted: [], skipped: [] })
+        expect(result).toEqual({ dryRun: false, deleted: [], skipped: [] })
       })
 
       it('should not query the dapps database', () => {
@@ -259,7 +259,7 @@ describe('createSubsquidComponent', () => {
       })
 
       it('should return an empty deleted and skipped result', () => {
-        expect(result).toEqual({ deleted: [], skipped: [] })
+        expect(result).toEqual({ dryRun: false, deleted: [], skipped: [] })
       })
 
       it('should not open a transaction on the dapps database', () => {

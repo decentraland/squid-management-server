@@ -280,7 +280,7 @@ export async function createSubsquidComponent({
     runningServiceNames: string[],
     olderThanMs: number,
     dryRun: boolean
-  ): Promise<PurgeResult> {
+  ): Promise<Pick<PurgeResult, 'deleted' | 'skipped'>> {
     const deleted: PurgeResult['deleted'] = []
     const skipped: PurgeResult['skipped'] = []
 
@@ -439,14 +439,14 @@ export async function createSubsquidComponent({
       logger.warn('purgeOldSchemas: could not list running services — aborting as a safety measure', {
         error: error instanceof Error ? error.message : String(error)
       })
-      return { deleted: [], skipped: [] }
+      return { dryRun, deleted: [], skipped: [] }
     }
     if (runningServiceNames.length === 0) {
       logger.warn('purgeOldSchemas: no running squid services detected — aborting as a safety measure')
-      return { deleted: [], skipped: [] }
+      return { dryRun, deleted: [], skipped: [] }
     }
 
-    const result: PurgeResult = { deleted: [], skipped: [] }
+    const result: PurgeResult = { dryRun, deleted: [], skipped: [] }
 
     for (const [name, database] of [
       ['dapps', dappsDatabase],

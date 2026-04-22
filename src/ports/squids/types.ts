@@ -55,25 +55,32 @@ export type PurgedSchema = {
  * - `running-service`: the schema is the latest deployment for an ECS squid
  *   service that currently has a running task, i.e. it could be promoted
  *   at any moment.
- * - `no-age-info`: no `indexers` row references this schema. We can't
- *   prove we created it and therefore refuse to touch it. In practice this
- *   entry will not appear in the result — such schemas are silently
- *   ignored — but the reason is reserved in case a future change surfaces
- *   them for visibility.
  * - `invalid-name`: the schema name does not match the safety regex
- *   `^squid_[a-zA-Z0-9_]+$`. Reserved for the same reason as
- *   `no-age-info`: a defensive tag that can be surfaced later.
+ *   `^squid_[a-zA-Z0-9_]+$`. A defensive gate applied immediately before
+ *   any `DROP SCHEMA`.
+ *
+ * Schemas without an `indexers` row (unknown age) are silently ignored
+ * and do not appear in the result at all: they are not something the
+ * purge created, and surfacing them would add noise.
  */
-export type PurgeSkipReason = 'active' | 'running-service' | 'no-age-info' | 'invalid-name'
+export type PurgeSkipReason = 'active' | 'running-service' | 'invalid-name'
 
 /**
- * Outcome of a `purgeOldSchemas` run. `deleted` lists what was actually
- * dropped (or would be dropped, when called with `dryRun: true`). `skipped`
- * lists schemas that were old enough but protected; see `PurgeSkipReason`.
- * Failures at DROP time are logged at `error` level and do not appear in
- * either array.
+ * Outcome of a `purgeOldSchemas` run.
+ *
+ * `deleted` lists the schemas the run acted on. When `dryRun` is `false`
+ * they were actually dropped; when `dryRun` is `true` they would have
+ * been dropped but nothing was executed — the `dryRun` flag on the
+ * result exists so downstream consumers (metrics, alerting) can tell
+ * the two apart without extra context.
+ *
+ * `skipped` lists schemas that were old enough but protected; see
+ * `PurgeSkipReason`. Failures at DROP time are logged at `error` level
+ * and do not appear in either array.
  */
 export type PurgeResult = {
+  /** Mirrors the `dryRun` flag the caller passed (default `false`). */
+  dryRun: boolean
   deleted: PurgedSchema[]
   skipped: Array<PurgedSchema & { reason: PurgeSkipReason }>
 }
