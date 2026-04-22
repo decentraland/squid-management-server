@@ -6,7 +6,7 @@ import type {
   ILoggerComponent,
   IMetricsComponent
 } from '@well-known-components/interfaces'
-import { IPgComponent } from '@well-known-components/pg-component'
+import { IPgComponent } from '@dcl/pg-component'
 import { metricDeclarations } from './metrics'
 import { IJobComponent } from './ports/job'
 import { ISlackComponent } from './ports/slack/component'

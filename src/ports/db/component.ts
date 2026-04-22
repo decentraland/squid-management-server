@@ -1,54 +1,33 @@
-import { IBaseComponent } from '@well-known-components/interfaces'
-import { Options, createPgComponent as createBasePgComponent } from '@well-known-components/pg-component'
-import { PoolClient } from 'pg'
-import { IPgComponent } from './types'
+import { IBaseComponent, IConfigComponent, ILoggerComponent, IMetricsComponent } from '@well-known-components/interfaces'
+import { IPgComponent, Options, createPgComponent as createBasePgComponent } from '@dcl/pg-component'
+
+type NeededComponents = {
+  config: IConfigComponent
+  logs: ILoggerComponent
+  metrics?: IMetricsComponent<string>
+}
 
 export async function createPgComponent(
-  components: createBasePgComponent.NeededComponents,
+  components: NeededComponents,
   options: { dbPrefix: string } & Options
 ): Promise<IPgComponent & IBaseComponent> {
-  const { config, logs, metrics } = components
-  const { dbPrefix } = options
-  let databaseUrl: string | undefined = await config.getString(`${dbPrefix}_PG_COMPONENT_PSQL_CONNECTION_STRING`)
+  const { dbPrefix, ...rest } = options
+  let databaseUrl: string | undefined = await components.config.getString(`${dbPrefix}_PG_COMPONENT_PSQL_CONNECTION_STRING`)
   if (!databaseUrl) {
-    const dbUser = await config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_USER`)
-    const dbDatabaseName = await config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_DATABASE`)
-    const dbPort = await config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_PORT`)
-    const dbHost = await config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_HOST`)
-    const dbPassword = await config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_PASSWORD`)
+    const dbUser = await components.config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_USER`)
+    const dbDatabaseName = await components.config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_DATABASE`)
+    const dbPort = await components.config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_PORT`)
+    const dbHost = await components.config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_HOST`)
+    const dbPassword = await components.config.requireString(`${dbPrefix}_PG_COMPONENT_PSQL_PASSWORD`)
 
     databaseUrl = `postgres://${dbUser}:${dbPassword}@${dbHost}:${dbPort}/${dbDatabaseName}`
   }
 
-  const pg = await createBasePgComponent(
-    { config, logs, metrics },
-    {
-      ...options,
-      pool: {
-        connectionString: databaseUrl
-      }
+  return createBasePgComponent(components, {
+    ...rest,
+    pool: {
+      ...rest.pool,
+      connectionString: databaseUrl
     }
-  )
-
-  async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>, onError?: (error: unknown) => Promise<void>): Promise<T> {
-    const client = await pg.getPool().connect()
-
-    try {
-      await client.query('BEGIN')
-      const result = await callback(client)
-      await client.query('COMMIT')
-
-      return result
-    } catch (error) {
-      await client.query('ROLLBACK')
-      if (onError) await onError(error)
-      throw error
-    } finally {
-      // TODO: handle the following eslint-disable statement
-
-      await client.release()
-    }
-  }
-
-  return { ...pg, withTransaction }
+  })
 }

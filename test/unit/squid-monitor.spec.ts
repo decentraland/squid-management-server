@@ -45,10 +45,7 @@ describe('Squid Monitor', () => {
 
     // Mock the Slack component
     slackComponentMock = {
-      sendMessage: jest.fn(),
-      sendFormattedMessage: jest.fn(),
-      start: jest.fn(),
-      stop: jest.fn()
+      sendFormattedMessage: jest.fn()
     }
 
     // Mock the config component

@@ -1,6 +1,6 @@
 import { ECSClient, UpdateServiceCommand } from '@aws-sdk/client-ecs'
 import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
-import { IPgComponent } from '@well-known-components/pg-component'
+import { IPgComponent } from '@dcl/pg-component'
 import { createSubsquidComponent } from '../../src/ports/squids/component'
 import { getPromoteQuery } from '../../src/ports/squids/queries'
 

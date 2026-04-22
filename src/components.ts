@@ -1,10 +1,10 @@
 import { createDotEnvConfigComponent } from '@well-known-components/env-config-provider'
-import { createServerComponent, createStatusCheckComponent } from '@well-known-components/http-server'
 import { createLogComponent } from '@well-known-components/logger'
-import { createMetricsComponent } from '@well-known-components/metrics'
-import { createPgComponent as createBasePgComponent } from '@well-known-components/pg-component'
 import { createTracerComponent } from '@well-known-components/tracer-component'
-import { createFetchComponent } from './adapters/fetch'
+import { createServerComponent, createStatusCheckComponent } from '@dcl/http-server'
+import { createMetricsComponent } from '@dcl/metrics'
+import { createPgComponent as createBasePgComponent } from '@dcl/pg-component'
+import { createTracedFetcherComponent } from '@dcl/traced-fetch-component'
 import { metricDeclarations } from './metrics'
 import { createPgComponent } from './ports/db/component'
 import { createSquidMonitorJob } from './ports/job/squid-monitor'
@@ -31,7 +31,7 @@ export async function initComponents(): Promise<AppComponents> {
   const logs = await createLogComponent({ metrics })
   const server = await createServerComponent<GlobalContext>({ config, logs }, { cors })
   const statusChecks = await createStatusCheckComponent({ server, config })
-  const fetch = await createFetchComponent({ tracer })
+  const fetch = await createTracedFetcherComponent({ tracer })
 
   const dappsDatabase = await createPgComponent(
     { config, logs, metrics },
