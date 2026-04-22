@@ -2,11 +2,8 @@ import { Network } from '@dcl/schemas'
 import { AppComponents } from '../../types'
 import { SlackMessage } from '../slack/component'
 import { Squid } from '../squids/types'
-import { createJobComponent } from './component'
 import { MOCK_SQUIDS } from './mocks'
-import { IJobComponent } from './types'
 
-const ONE_MINUTE = 60 * 1000
 export const ETA_CONSIDERED_OUT_OF_SYNC = 100
 export const FIVE_MINUTES = 5 * 60 * 1000
 
@@ -18,9 +15,9 @@ export function clearNoMetricsThrottleState(): void {
   noMetricsFirstDetected.clear()
 }
 
-export async function createSquidMonitorJob(
+export async function createSquidMonitor(
   components: Pick<AppComponents, 'logs' | 'squids' | 'config' | 'slack'>
-): Promise<IJobComponent> {
+): Promise<() => Promise<void>> {
   const { logs, squids, config, slack } = components
   const IS_PRODUCTION = (await config.getString('ENV')) === 'prd'
   const ENV_PREFIX = IS_PRODUCTION ? '[PRD]' : '[DEV]'
@@ -327,11 +324,5 @@ export async function createSquidMonitorJob(
     }
   }
 
-  return createJobComponent(components, IS_PRODUCTION ? monitorSquids : () => Promise.resolve(), ONE_MINUTE, {
-    repeat: IS_PRODUCTION,
-    startupDelay: 0,
-    onError: error => {
-      logger.error('❌ Error in squid monitor job:', { error: formatError(error) })
-    }
-  })
+  return monitorSquids
 }

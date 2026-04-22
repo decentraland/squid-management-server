@@ -5,12 +5,13 @@ import { createLogComponent } from '@well-known-components/logger'
 import { createLocalFetchCompoment, createRunner } from '@well-known-components/test-helpers'
 import { createTracerComponent } from '@well-known-components/tracer-component'
 import { createServerComponent } from '@dcl/http-server'
+import { createJobComponent } from '@dcl/job-component'
 import { createMetricsComponent } from '@dcl/metrics'
 import { createPgComponent as createBasePgComponent } from '@dcl/pg-component'
 import { createTracedFetcherComponent } from '@dcl/traced-fetch-component'
 import { metricDeclarations } from '../src/metrics'
 import { createPgComponent } from '../src/ports/db/component'
-import { createSquidMonitorJob } from '../src/ports/job/squid-monitor'
+import { createSquidMonitor } from '../src/ports/job/squid-monitor'
 import { createSlackComponent } from '../src/ports/slack'
 import { createSubsquidComponent } from '../src/ports/squids/component'
 import { main } from '../src/service'
@@ -72,7 +73,8 @@ async function initComponents(): Promise<TestComponents> {
     logs
   })
   const slack = await createSlackComponent({ config, logs })
-  const squidMonitorJob = await createSquidMonitorJob({ config, logs, squids, slack })
+  const monitorSquids = await createSquidMonitor({ config, logs, squids, slack })
+  const squidMonitorJob = createJobComponent({ logs }, monitorSquids, 60 * 1000, { repeat: false })
 
   return {
     config,

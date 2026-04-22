@@ -24,6 +24,7 @@
   "dependencies": {
     "@aws-sdk/client-ecs": "^3.1034.0",
     "@dcl/http-server": "^1.0.1",
+    "@dcl/job-component": "^0.3.0",
     "@dcl/metrics": "^1.0.1",
     "@dcl/pg-component": "^0.2.0",
     "@dcl/schemas": "^26.1.0",

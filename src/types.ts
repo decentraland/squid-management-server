@@ -6,9 +6,9 @@ import type {
   ILoggerComponent,
   IMetricsComponent
 } from '@well-known-components/interfaces'
+import { IJobComponent } from '@dcl/job-component'
 import { IPgComponent } from '@dcl/pg-component'
 import { metricDeclarations } from './metrics'
-import { IJobComponent } from './ports/job'
 import { ISlackComponent } from './ports/slack/component'
 import { ISquidComponent } from './ports/squids/types'
 
