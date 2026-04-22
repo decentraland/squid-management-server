@@ -1,5 +1,5 @@
 import { ECSClient, UpdateServiceCommand } from '@aws-sdk/client-ecs'
-import { IFetchComponent, IConfigComponent, ILoggerComponent } from '@well-known-components/interfaces'
+import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { IPgComponent } from '@well-known-components/pg-component'
 import { createSubsquidComponent } from '../../src/ports/squids/component'
 import { getPromoteQuery } from '../../src/ports/squids/queries'
@@ -17,7 +17,7 @@ describe('createSubsquidComponent', () => {
   let logsMock: ILoggerComponent
 
   beforeEach(() => {
-    fetchMock = { fetch: jest.fn() } as IFetchComponent
+    fetchMock = { fetch: jest.fn() }
     dappsDatabaseMock = { query: jest.fn() } as unknown as IPgComponent
     creditsDatabaseMock = { query: jest.fn() } as unknown as IPgComponent
     configMock = { requireString: jest.fn().mockResolvedValue('test-cluster') } as unknown as IConfigComponent
@@ -27,7 +27,7 @@ describe('createSubsquidComponent', () => {
         error: jest.fn(),
         warn: jest.fn()
       })
-    } as unknown as ILoggerComponent
+    }
 
     ecsClientMock = new ECSClient({ region: 'us-east-1' })
     ;(ECSClient as jest.Mock).mockImplementation(() => ecsClientMock)

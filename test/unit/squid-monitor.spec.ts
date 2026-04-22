@@ -2,11 +2,11 @@ import { IConfigComponent, ILoggerComponent } from '@well-known-components/inter
 import { Network } from '@dcl/schemas'
 import { createJobComponent } from '../../src/ports/job/component'
 import {
-  createSquidMonitorJob,
   ETA_CONSIDERED_OUT_OF_SYNC,
   FIVE_MINUTES,
-  noMetricsFirstDetected,
-  clearNoMetricsThrottleState
+  clearNoMetricsThrottleState,
+  createSquidMonitorJob,
+  noMetricsFirstDetected
 } from '../../src/ports/job/squid-monitor'
 import { ISlackComponent, SlackMessageBlock } from '../../src/ports/slack/component'
 import { ISquidComponent, Squid, SquidMetric } from '../../src/ports/squids/types'
@@ -31,10 +31,10 @@ describe('Squid Monitor', () => {
       info: jest.fn(),
       error: jest.fn(),
       warn: jest.fn()
-    } as unknown as { info: jest.Mock; error: jest.Mock; warn: jest.Mock }
+    }
     logsMock = {
       getLogger: jest.fn().mockReturnValue(loggerMock)
-    } as unknown as ILoggerComponent
+    }
 
     // Mock the squids component
     squidsMock = {
@@ -49,7 +49,7 @@ describe('Squid Monitor', () => {
       sendFormattedMessage: jest.fn(),
       start: jest.fn(),
       stop: jest.fn()
-    } as unknown as ISlackComponent
+    }
 
     // Mock the config component
     configMock = {

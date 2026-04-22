@@ -1,6 +1,7 @@
+import { getDefaultHttpMetrics } from '@well-known-components/http-server'
 import { IMetricsComponent } from '@well-known-components/interfaces'
 import { metricDeclarations as logsMetricsDeclarations } from '@well-known-components/logger'
-import { getDefaultHttpMetrics, validateMetricsDeclaration } from '@well-known-components/metrics'
+import { validateMetricsDeclaration } from '@well-known-components/metrics'
 
 export const metricDeclarations = {
   ...getDefaultHttpMetrics(),

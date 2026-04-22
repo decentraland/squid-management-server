@@ -5,7 +5,7 @@ import { createServerComponent } from '@well-known-components/http-server'
 import { createLogComponent } from '@well-known-components/logger'
 import { createMetricsComponent } from '@well-known-components/metrics'
 import { createPgComponent as createBasePgComponent } from '@well-known-components/pg-component'
-import { createRunner, createLocalFetchCompoment } from '@well-known-components/test-helpers'
+import { createLocalFetchCompoment, createRunner } from '@well-known-components/test-helpers'
 import { createTracerComponent } from '@well-known-components/tracer-component'
 import { createFetchComponent } from '../src/adapters/fetch'
 import { metricDeclarations } from '../src/metrics'
@@ -34,7 +34,7 @@ async function initComponents(): Promise<TestComponents> {
   })
   const cors = {
     origin: await config.requireString('CORS_ORIGIN'),
-    methods: await config.requireString('CORS_METHODS')
+    methods: (await config.requireString('CORS_METHODS')).split(',').map(method => method.trim())
   }
   const tracer = createTracerComponent()
   const fetch = await createFetchComponent({ tracer })

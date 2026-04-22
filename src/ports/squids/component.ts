@@ -1,11 +1,11 @@
 import {
+  DescribeServicesCommand,
+  DescribeTasksCommand,
   ECSClient,
   ListServicesCommand,
-  ListTasksCommand,
-  DescribeTasksCommand,
   ListServicesRequest,
-  UpdateServiceCommand,
-  DescribeServicesCommand
+  ListTasksCommand,
+  UpdateServiceCommand
 } from '@aws-sdk/client-ecs'
 import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { IPgComponent } from '@well-known-components/pg-component'
@@ -162,7 +162,7 @@ export async function createSubsquidComponent({
 
           // Only include complete squid objects
           if (squid.created_at && squid.health_status && squid.service_status) {
-            return squid as Squid
+            return squid
           } else {
             logger.warn(`Skipping incomplete squid: ${squid.service_name}`)
             return null

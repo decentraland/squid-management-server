@@ -1,5 +1,5 @@
 import { IBaseComponent } from '@well-known-components/interfaces'
-import { createPgComponent as createBasePgComponent, Options } from '@well-known-components/pg-component'
+import { Options, createPgComponent as createBasePgComponent } from '@well-known-components/pg-component'
 import { PoolClient } from 'pg'
 import { IPgComponent } from './types'
 
@@ -45,7 +45,7 @@ export async function createPgComponent(
       throw error
     } finally {
       // TODO: handle the following eslint-disable statement
-      // eslint-disable-next-line @typescript-eslint/await-thenable
+
       await client.release()
     }
   }
