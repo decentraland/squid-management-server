@@ -82,15 +82,18 @@ export async function initComponents(): Promise<AppComponents> {
   const ONE_DAY_MS = 24 * 60 * 60 * 1000
   const FIVE_MINUTES_MS = 5 * 60 * 1000
   const schemaPurgeLogger = logs.getLogger('schema-purge-job')
+  const schemaPurgeMaxAgeDays = await config.getNumber('SCHEMA_PURGE_MAX_AGE_DAYS')
+  const schemaPurgeOlderThanMs = schemaPurgeMaxAgeDays && schemaPurgeMaxAgeDays > 0 ? schemaPurgeMaxAgeDays * ONE_DAY_MS : undefined
+  if (schemaPurgeOlderThanMs === undefined) {
+    schemaPurgeLogger.info('SCHEMA_PURGE_MAX_AGE_DAYS not set or non-positive; schema purge job is disabled')
+  } else {
+    schemaPurgeLogger.info(`Schema purge enabled: schemas older than ${schemaPurgeMaxAgeDays} day(s) will be candidates`)
+  }
   const schemaPurgeJob = createJobComponent(
     { logs },
     async () => {
-      const maxAgeDays = await config.getNumber('SCHEMA_PURGE_MAX_AGE_DAYS')
-      if (!maxAgeDays || maxAgeDays <= 0) {
-        schemaPurgeLogger.info('SCHEMA_PURGE_MAX_AGE_DAYS not configured; skipping schema purge')
-        return
-      }
-      const result = await squids.purgeOldSchemas({ olderThanMs: maxAgeDays * ONE_DAY_MS })
+      if (schemaPurgeOlderThanMs === undefined) return
+      const result = await squids.purgeOldSchemas({ olderThanMs: schemaPurgeOlderThanMs })
       schemaPurgeLogger.info(`Schema purge: deleted ${result.deleted.length}, skipped ${result.skipped.length}`, {
         deleted: JSON.stringify(result.deleted),
         skipped: JSON.stringify(result.skipped)
