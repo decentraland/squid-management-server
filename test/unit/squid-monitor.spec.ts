@@ -1,17 +1,15 @@
 import { IConfigComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { Network } from '@dcl/schemas'
-import { createJobComponent } from '../../src/ports/job/component'
+import { ISlackComponent } from '@dcl/slack-component'
 import {
-  createSquidMonitorJob,
   ETA_CONSIDERED_OUT_OF_SYNC,
   FIVE_MINUTES,
-  noMetricsFirstDetected,
-  clearNoMetricsThrottleState
+  SlackMessageBlock,
+  clearNoMetricsThrottleState,
+  createSquidMonitor,
+  noMetricsFirstDetected
 } from '../../src/ports/job/squid-monitor'
-import { ISlackComponent, SlackMessageBlock } from '../../src/ports/slack/component'
 import { ISquidComponent, Squid, SquidMetric } from '../../src/ports/squids/types'
-
-jest.mock('../../src/ports/job/component')
 
 describe('Squid Monitor', () => {
   let logsMock: ILoggerComponent
@@ -20,7 +18,7 @@ describe('Squid Monitor', () => {
   let configMock: IConfigComponent
   let slackComponentMock: ISlackComponent
   let mockSquids: Squid[]
-  let jobFunction: () => Promise<void>
+  let monitorSquids: () => Promise<void>
 
   beforeEach(() => {
     // Clear throttle state before each test
@@ -31,10 +29,10 @@ describe('Squid Monitor', () => {
       info: jest.fn(),
       error: jest.fn(),
       warn: jest.fn()
-    } as unknown as { info: jest.Mock; error: jest.Mock; warn: jest.Mock }
+    }
     logsMock = {
       getLogger: jest.fn().mockReturnValue(loggerMock)
-    } as unknown as ILoggerComponent
+    }
 
     // Mock the squids component
     squidsMock = {
@@ -45,11 +43,8 @@ describe('Squid Monitor', () => {
 
     // Mock the Slack component
     slackComponentMock = {
-      sendMessage: jest.fn(),
-      sendFormattedMessage: jest.fn(),
-      start: jest.fn(),
-      stop: jest.fn()
-    } as unknown as ISlackComponent
+      sendMessage: jest.fn()
+    }
 
     // Mock the config component
     configMock = {
@@ -60,17 +55,6 @@ describe('Squid Monitor', () => {
         return 'false'
       })
     } as unknown as IConfigComponent
-
-    // Mock the job component
-    ;(createJobComponent as jest.Mock).mockImplementation(
-      (_components: Record<string, unknown>, fn: () => Promise<void>, _interval: number, _options: Record<string, unknown>) => {
-        jobFunction = fn
-        return {
-          start: jest.fn(),
-          stop: jest.fn()
-        }
-      }
-    )
 
     // Create test squids
     mockSquids = [
@@ -173,38 +157,10 @@ describe('Squid Monitor', () => {
     jest.clearAllMocks()
   })
 
-  describe('createSquidMonitorJob', () => {
-    it('should create a job component with the correct parameters', async () => {
-      const components = { logs: logsMock, squids: squidsMock, config: configMock, slack: slackComponentMock }
-
-      await createSquidMonitorJob(components)
-
-      // Verify that createJobComponent was called
-      expect(createJobComponent).toHaveBeenCalled()
-
-      // Verify that the correct components were passed
-      const callArgs = (createJobComponent as jest.Mock).mock.calls[0]
-      expect(callArgs[0]).toBe(components)
-
-      // Verify that a function was passed as the second argument
-      expect(typeof callArgs[1]).toBe('function')
-
-      // Verify that the interval of one minute (60000 ms) was passed
-      expect(callArgs[2]).toBe(60000)
-
-      // Verify that the correct options were passed
-      expect(callArgs[3]).toEqual({
-        repeat: true,
-        startupDelay: 0,
-        onError: expect.any(Function)
-      })
-    })
-  })
-
   describe('monitorSquids', () => {
     beforeEach(async () => {
       const components = { logs: logsMock, squids: squidsMock, config: configMock, slack: slackComponentMock }
-      await createSquidMonitorJob(components)
+      monitorSquids = await createSquidMonitor(components)
     })
 
     describe('when squids have undefined or null ETA', () => {
@@ -215,14 +171,14 @@ describe('Squid Monitor', () => {
 
       it('should send alerts for each network with unavailable ETA', async () => {
         // Execute the monitoring function
-        await jobFunction()
+        await monitorSquids()
 
-        // Verify that sendFormattedMessage was called for the squid without ETA (twice, once for each network)
+        // Verify that sendMessage was called for the squid without ETA (twice, once for each network)
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).toHaveBeenCalledTimes(2)
+        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(2)
 
         // Verify that the messages contain the correct information for unavailable ETA
-        const calls = (slackComponentMock.sendFormattedMessage as jest.Mock).mock.calls
+        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
 
         // Verify that at least one of the messages is for unavailable ETA on Ethereum
         const etaUnavailableEthereumCall = calls.find(
@@ -248,14 +204,14 @@ describe('Squid Monitor', () => {
 
       it('should send alerts for networks with ETA > ETA_CONSIDERED_OUT_OF_SYNC seconds', async () => {
         // Execute the monitoring function
-        await jobFunction()
+        await monitorSquids()
 
-        // Verify that sendFormattedMessage was called for the out of sync squid (only on Ethereum)
+        // Verify that sendMessage was called for the out of sync squid (only on Ethereum)
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).toHaveBeenCalledTimes(1)
+        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(1)
 
         // Verify that the messages contain the correct information for desynchronization
-        const calls = (slackComponentMock.sendFormattedMessage as jest.Mock).mock.calls
+        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
 
         // Verify that the message is for desynchronization on Ethereum
         const desyncCall = calls.find(
@@ -285,11 +241,11 @@ describe('Squid Monitor', () => {
 
       it('should not send any alerts', async () => {
         // Execute the monitoring function
-        await jobFunction()
+        await monitorSquids()
 
         // Verify that no messages were sent
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
       })
     })
 
@@ -301,11 +257,11 @@ describe('Squid Monitor', () => {
 
       it('should not send alert on first detection of no metrics', async () => {
         // Execute the monitoring function
-        await jobFunction()
+        await monitorSquids()
 
         // Verify that no slack message was sent
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
 
         // Verify that the issue was logged
         expect(loggerMock.warn).toHaveBeenCalledWith('No metrics found for squid squid-without-metrics on network ETHEREUM')
@@ -333,14 +289,14 @@ describe('Squid Monitor', () => {
         noMetricsFirstDetected.set('squid-without-metrics-MATIC-no-metrics', fiveMinutesAgo)
 
         // Execute the monitoring function
-        await jobFunction()
+        await monitorSquids()
 
         // Verify that slack messages were sent for both networks
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).toHaveBeenCalledTimes(2)
+        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(2)
 
         // Verify message content includes duration
-        const calls = (slackComponentMock.sendFormattedMessage as jest.Mock).mock.calls
+        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
 
         // Check that both messages are for no metrics
         const noMetricsCallEthereum = calls.find(
@@ -373,17 +329,17 @@ describe('Squid Monitor', () => {
         noMetricsFirstDetected.set('squid-without-metrics-MATIC-no-metrics', fiveMinutesAgo)
 
         // Execute monitoring (this should send alerts and reset timestamps)
-        await jobFunction()
+        await monitorSquids()
 
         // Clear the mock call history
-        ;(slackComponentMock.sendFormattedMessage as jest.Mock).mockClear()
+        ;(slackComponentMock.sendMessage as jest.Mock).mockClear()
 
         // Execute monitoring again immediately (should not send alerts)
-        await jobFunction()
+        await monitorSquids()
 
         // Verify that no additional slack messages were sent
         // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendFormattedMessage).not.toHaveBeenCalled()
+        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
       })
 
       it('should clear throttle state when metrics are recovered', async () => {
@@ -413,7 +369,7 @@ describe('Squid Monitor', () => {
         squidsMock.list = jest.fn().mockResolvedValue([squidWithRecoveredMetrics])
 
         // Execute the monitoring function
-        await jobFunction()
+        await monitorSquids()
 
         // Verify that the throttle state was cleared
         expect(noMetricsFirstDetected.size).toBe(0)

@@ -1,17 +1,18 @@
 // This file is the "test-environment" analogous for src/components.ts
 // Here we define the test components to be used in the testing environment
 import { createDotEnvConfigComponent } from '@well-known-components/env-config-provider'
-import { createServerComponent } from '@well-known-components/http-server'
 import { createLogComponent } from '@well-known-components/logger'
-import { createMetricsComponent } from '@well-known-components/metrics'
-import { createPgComponent as createBasePgComponent } from '@well-known-components/pg-component'
-import { createRunner, createLocalFetchCompoment } from '@well-known-components/test-helpers'
+import { createLocalFetchCompoment, createRunner } from '@well-known-components/test-helpers'
 import { createTracerComponent } from '@well-known-components/tracer-component'
-import { createFetchComponent } from '../src/adapters/fetch'
+import { createServerComponent } from '@dcl/http-server'
+import { createJobComponent } from '@dcl/job-component'
+import { createMetricsComponent } from '@dcl/metrics'
+import { createPgComponent as createBasePgComponent } from '@dcl/pg-component'
+import { createSlackComponent } from '@dcl/slack-component'
+import { createTracedFetcherComponent } from '@dcl/traced-fetch-component'
 import { metricDeclarations } from '../src/metrics'
 import { createPgComponent } from '../src/ports/db/component'
-import { createSquidMonitorJob } from '../src/ports/job/squid-monitor'
-import { createSlackComponent } from '../src/ports/slack'
+import { createSquidMonitor } from '../src/ports/job/squid-monitor'
 import { createSubsquidComponent } from '../src/ports/squids/component'
 import { main } from '../src/service'
 import { GlobalContext, TestComponents } from '../src/types'
@@ -34,10 +35,10 @@ async function initComponents(): Promise<TestComponents> {
   })
   const cors = {
     origin: await config.requireString('CORS_ORIGIN'),
-    methods: await config.requireString('CORS_METHODS')
+    methods: (await config.requireString('CORS_METHODS')).split(',').map(method => method.trim())
   }
   const tracer = createTracerComponent()
-  const fetch = await createFetchComponent({ tracer })
+  const fetch = await createTracedFetcherComponent({ tracer })
   const metrics = await createMetricsComponent(metricDeclarations, { config })
   const logs = await createLogComponent({ metrics })
   const server = await createServerComponent<GlobalContext>({ config, logs }, { cors })
@@ -71,8 +72,10 @@ async function initComponents(): Promise<TestComponents> {
     config,
     logs
   })
-  const slack = await createSlackComponent({ config, logs })
-  const squidMonitorJob = await createSquidMonitorJob({ config, logs, squids, slack })
+  const slackToken = await config.requireString('SLACK_BOT_TOKEN')
+  const slack = createSlackComponent({ logs }, { token: slackToken })
+  const monitorSquids = await createSquidMonitor({ config, logs, squids, slack })
+  const squidMonitorJob = createJobComponent({ logs }, monitorSquids, 60 * 1000, { repeat: false })
 
   return {
     config,

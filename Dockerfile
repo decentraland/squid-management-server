@@ -1,17 +1,13 @@
 ARG RUN
 
-FROM node:18.18-alpine as builderenv
+FROM node:22-alpine AS builderenv
 
 WORKDIR /app
-
-# some packages require a build step
-RUN apk update
-RUN apk add --no-cache py3-setuptools python3-dev build-base g++ make py3-pip libpng-dev jpeg-dev pango-dev cairo-dev giflib-dev librsvg-dev
 
 # install dependencies
 COPY package.json /app/package.json
 COPY package-lock.json /app/package-lock.json
-RUN npm install
+RUN npm ci
 
 # build the app
 COPY . /app
@@ -19,17 +15,16 @@ RUN npm run build
 RUN npm run test
 
 # remove devDependencies, keep only used dependencies
-RUN npm install --only=production --ignore-scripts
+RUN npm prune --omit=dev
 
 ########################## END OF BUILD STAGE ##########################
 
-FROM node:18.18-alpine
+FROM node:22-alpine
 
-RUN apk update
-RUN apk add --no-cache tini libpng jpeg cairo pango giflib librsvg-dev
+RUN apk add --no-cache tini
 
 # NODE_ENV is used to configure some runtime options, like JSON logger
-ENV NODE_ENV production
+ENV NODE_ENV=production
 
 WORKDIR /app
 COPY --from=builderenv /app /app

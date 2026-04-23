@@ -1,15 +1,15 @@
-import type { IFetchComponent } from '@well-known-components/http-server'
 import type {
-  IConfigComponent,
-  ILoggerComponent,
-  IHttpServerComponent,
   IBaseComponent,
+  IConfigComponent,
+  IFetchComponent,
+  IHttpServerComponent,
+  ILoggerComponent,
   IMetricsComponent
 } from '@well-known-components/interfaces'
-import { IPgComponent } from '@well-known-components/pg-component'
+import { IJobComponent } from '@dcl/job-component'
+import { IPgComponent } from '@dcl/pg-component'
+import { ISlackComponent } from '@dcl/slack-component'
 import { metricDeclarations } from './metrics'
-import { IJobComponent } from './ports/job'
-import { ISlackComponent } from './ports/slack/component'
 import { ISquidComponent } from './ports/squids/types'
 
 export type GlobalContext = {

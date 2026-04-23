@@ -1,14 +1,39 @@
 import { Network } from '@dcl/schemas'
 import { AppComponents } from '../../types'
-import { SlackMessage } from '../slack/component'
 import { Squid } from '../squids/types'
-import { createJobComponent } from './component'
 import { MOCK_SQUIDS } from './mocks'
-import { IJobComponent } from './types'
 
-const ONE_MINUTE = 60 * 1000
 export const ETA_CONSIDERED_OUT_OF_SYNC = 100
 export const FIVE_MINUTES = 5 * 60 * 1000
+
+export type SlackMessageBlock = {
+  type: 'section' | 'header' | 'divider' | 'context'
+  text?: {
+    type: 'mrkdwn' | 'plain_text'
+    text: string
+  }
+  fields?: Array<{
+    type: 'mrkdwn' | 'plain_text'
+    text: string
+  }>
+  elements?: Array<{
+    type: 'mrkdwn' | 'plain_text'
+    text: string
+  }>
+  accessory?: {
+    type: 'button'
+    text: {
+      type: 'plain_text'
+      text: string
+    }
+    action_id: string
+  }
+}
+
+type SquidAlertMessage = {
+  text: string
+  blocks?: SlackMessageBlock[]
+}
 
 // State to track when "no metrics" issues were first detected for throttling alerts
 export const noMetricsFirstDetected = new Map<string, number>()
@@ -18,13 +43,14 @@ export function clearNoMetricsThrottleState(): void {
   noMetricsFirstDetected.clear()
 }
 
-export async function createSquidMonitorJob(
+export async function createSquidMonitor(
   components: Pick<AppComponents, 'logs' | 'squids' | 'config' | 'slack'>
-): Promise<IJobComponent> {
+): Promise<() => Promise<void>> {
   const { logs, squids, config, slack } = components
   const IS_PRODUCTION = (await config.getString('ENV')) === 'prd'
   const ENV_PREFIX = IS_PRODUCTION ? '[PRD]' : '[DEV]'
   const BASE_URL = IS_PRODUCTION ? 'https://decentraland.org/squid-management-ui' : 'https://decentraland.zone/squid-management-ui'
+  const slackChannel = (await config.getString('SLACK_CHANNEL')) || 'general'
   const logger = logs.getLogger('squid-monitor')
 
   const MOCK_ENABLED = (await config.getString('USE_MOCK_SQUIDS')) === 'true' //  this is for testing locally
@@ -61,7 +87,7 @@ export async function createSquidMonitorJob(
         }
       }
 
-      const errorSlackMessage: SlackMessage = {
+      const errorSlackMessage: SquidAlertMessage = {
         text: `${ENV_PREFIX} 🚨 ERROR: There was a problem monitoring the Squids`,
         blocks: [
           {
@@ -90,7 +116,7 @@ export async function createSquidMonitorJob(
         ]
       }
 
-      await slack.sendFormattedMessage(errorSlackMessage)
+      await slack.sendMessage({ channel: slackChannel, ...errorSlackMessage })
     }
   }
 
@@ -138,7 +164,7 @@ export async function createSquidMonitorJob(
           logger.info(`First detection of no metrics for ${squid.service_name} on ${network}. Will send alert after 5 minutes.`)
         } else if (now - firstDetected >= FIVE_MINUTES) {
           // Issue has persisted for 5 minutes, send the alert
-          const noMetricsMessage: SlackMessage = {
+          const noMetricsMessage: SquidAlertMessage = {
             text: `${ENV_PREFIX} ⚠️ ALERT: No metrics found for Squid '${squid.name}' on network ${network}`,
             blocks: [
               {
@@ -180,7 +206,7 @@ export async function createSquidMonitorJob(
               }
             ]
           }
-          await slack.sendFormattedMessage(noMetricsMessage)
+          await slack.sendMessage({ channel: slackChannel, ...noMetricsMessage })
 
           // Reset the timestamp to avoid spamming (will only send again after another 5 minutes)
           noMetricsFirstDetected.set(noMetricsKey, now)
@@ -204,7 +230,7 @@ export async function createSquidMonitorJob(
       if (metrics.sqd_processor_sync_eta_seconds === null || metrics.sqd_processor_sync_eta_seconds === undefined) {
         const squidDetailsUrl = `${BASE_URL}?squid=${squid.service_name}&network=${network}`
 
-        const etaUnavailableMessage: SlackMessage = {
+        const etaUnavailableMessage: SquidAlertMessage = {
           text: `${ENV_PREFIX} ⚠️ ALERT: Cannot read ETA for Squid '${squid.name}' on network ${network}`,
           blocks: [
             {
@@ -253,7 +279,7 @@ export async function createSquidMonitorJob(
           ]
         }
 
-        await slack.sendFormattedMessage(etaUnavailableMessage)
+        await slack.sendMessage({ channel: slackChannel, ...etaUnavailableMessage })
         continue
       }
 
@@ -261,7 +287,7 @@ export async function createSquidMonitorJob(
       if (metrics.sqd_processor_sync_eta_seconds > ETA_CONSIDERED_OUT_OF_SYNC) {
         const squidDetailsUrl = `${BASE_URL}?squid=${squid.service_name}&network=${network}`
 
-        const desyncMessage: SlackMessage = {
+        const desyncMessage: SquidAlertMessage = {
           text: `${ENV_PREFIX} ⚠️ ALERT: Squid '${squid.name}' on network ${network} is out of sync`,
           blocks: [
             {
@@ -322,16 +348,10 @@ export async function createSquidMonitorJob(
           ]
         }
 
-        await slack.sendFormattedMessage(desyncMessage)
+        await slack.sendMessage({ channel: slackChannel, ...desyncMessage })
       }
     }
   }
 
-  return createJobComponent(components, IS_PRODUCTION ? monitorSquids : () => Promise.resolve(), ONE_MINUTE, {
-    repeat: IS_PRODUCTION,
-    startupDelay: 0,
-    onError: error => {
-      logger.error('❌ Error in squid monitor job:', { error: formatError(error) })
-    }
-  })
+  return monitorSquids
 }

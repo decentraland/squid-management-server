@@ -1,14 +1,15 @@
 import { createDotEnvConfigComponent } from '@well-known-components/env-config-provider'
-import { createServerComponent, createStatusCheckComponent } from '@well-known-components/http-server'
 import { createLogComponent } from '@well-known-components/logger'
-import { createMetricsComponent } from '@well-known-components/metrics'
-import { createPgComponent as createBasePgComponent } from '@well-known-components/pg-component'
 import { createTracerComponent } from '@well-known-components/tracer-component'
-import { createFetchComponent } from './adapters/fetch'
+import { createServerComponent, createStatusCheckComponent } from '@dcl/http-server'
+import { createJobComponent } from '@dcl/job-component'
+import { createMetricsComponent } from '@dcl/metrics'
+import { createPgComponent as createBasePgComponent } from '@dcl/pg-component'
+import { createSlackComponent } from '@dcl/slack-component'
+import { createTracedFetcherComponent } from '@dcl/traced-fetch-component'
 import { metricDeclarations } from './metrics'
 import { createPgComponent } from './ports/db/component'
-import { createSquidMonitorJob } from './ports/job/squid-monitor'
-import { createSlackComponent } from './ports/slack/component'
+import { createSquidMonitor } from './ports/job/squid-monitor'
 import { createSubsquidComponent } from './ports/squids/component'
 import { AppComponents, GlobalContext } from './types'
 
@@ -31,7 +32,7 @@ export async function initComponents(): Promise<AppComponents> {
   const logs = await createLogComponent({ metrics })
   const server = await createServerComponent<GlobalContext>({ config, logs }, { cors })
   const statusChecks = await createStatusCheckComponent({ server, config })
-  const fetch = await createFetchComponent({ tracer })
+  const fetch = await createTracedFetcherComponent({ tracer })
 
   const dappsDatabase = await createPgComponent(
     { config, logs, metrics },
@@ -64,12 +65,19 @@ export async function initComponents(): Promise<AppComponents> {
     logs
   })
 
-  const slack = await createSlackComponent({
-    config,
-    logs
-  })
+  const slackToken = await config.requireString('SLACK_BOT_TOKEN')
+  const slack = createSlackComponent({ logs }, { token: slackToken })
 
-  const squidMonitorJob = await createSquidMonitorJob({ logs, squids, config, slack })
+  const monitorSquids = await createSquidMonitor({ logs, squids, config, slack })
+  const isProduction = (await config.getString('ENV')) === 'prd'
+  const squidMonitorLogger = logs.getLogger('squid-monitor-job')
+  const squidMonitorJob = createJobComponent({ logs }, isProduction ? monitorSquids : () => Promise.resolve(), 60 * 1000, {
+    repeat: isProduction,
+    startupDelay: 0,
+    onError: error => {
+      squidMonitorLogger.error('❌ Error in squid monitor job:', { error: error instanceof Error ? error.message : String(error) })
+    }
+  })
 
   return {
     config,
