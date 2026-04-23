@@ -8,10 +8,20 @@ import {
   UpdateServiceCommand
 } from '@aws-sdk/client-ecs'
 import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
+import { PoolClient } from 'pg'
 import { IPgComponent } from '@dcl/pg-component'
 import { Network } from '@dcl/schemas'
-import { getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
-import { ISquidComponent, Squid, SquidMetric } from './types'
+import {
+  buildDropSchemaStatement,
+  getActiveSchemaQuery,
+  getActivelyPromotedSchemasQuery,
+  getDeleteIndexersBySchemaQuery,
+  getPromoteQuery,
+  getSchemaAgesQuery,
+  getSchemaByServiceNameQuery,
+  getSquidSchemasQuery
+} from './queries'
+import { DatabaseName, ISquidComponent, PurgeOptions, PurgeResult, PurgeSkipReason, Squid, SquidMetric } from './types'
 import { getMetricValue, getProjectNameFromService, getSquidsNetworksMapping } from './utils'
 
 const AWS_REGION = 'us-east-1'
@@ -237,9 +247,232 @@ export async function createSubsquidComponent({
     }
   }
 
+  /**
+   * Allowed shape for any schema the purge is permitted to drop. Enforced
+   * immediately before each `DROP SCHEMA` so a malformed name that slipped
+   * through earlier filters can never reach the database.
+   */
+  const SAFE_SCHEMA_NAME = /^squid_[a-zA-Z0-9_]+$/
+
+  /**
+   * Classifies and purges candidate schemas in a single database. The
+   * caller owns the `runningServiceNames` list so both databases can share
+   * the same ECS snapshot.
+   *
+   * For every `squid_*` schema found:
+   *   1. Look up its age via `MAX(indexers.created_at)`. Schemas without
+   *      an indexers row are silently ignored.
+   *   2. If the age is below `olderThanMs`, do nothing.
+   *   3. Otherwise, classify as one of: `active` (promoted), `running-
+   *      service` (latest deployment of a running ECS service),
+   *      `invalid-name` (failed the safety regex), or a drop candidate.
+   *   4. Drop candidates are DROPped + their indexers rows DELETEd inside
+   *      a per-schema transaction (so a failure can't leave orphan
+   *      history). When `dryRun` is true the drop is not executed but
+   *      the candidate is still reported under `deleted`.
+   *
+   * Per-schema failures are logged and the caller continues with the
+   * next schema; one broken DROP does not abort the whole run.
+   */
+  async function purgeSchemasInDatabase(
+    databaseName: DatabaseName,
+    database: IPgComponent,
+    runningServiceNames: string[],
+    olderThanMs: number,
+    dryRun: boolean
+  ): Promise<Pick<PurgeResult, 'deleted' | 'skipped'>> {
+    const deleted: PurgeResult['deleted'] = []
+    const skipped: PurgeResult['skipped'] = []
+
+    const { rows: existing } = await database.query<{ schema_name: string }>(getSquidSchemasQuery())
+    if (existing.length === 0) return { deleted, skipped }
+
+    const schemaNames = existing.map(row => row.schema_name)
+    const { rows: ageRows } = await database.query<{ schema: string; max_created_at: Date | null }>(getSchemaAgesQuery(schemaNames))
+    // Defensive: if every `indexers.created_at` for a schema is NULL, `MAX`
+    // also returns NULL. Treating that as epoch (the default of `new Date(null)`)
+    // would make the schema look ~56 years old and trivially pass any
+    // threshold, so we skip it entirely — same safety posture as having no
+    // indexers row at all.
+    const schemaAges = new Map<string, number>()
+    for (const row of ageRows) {
+      if (row.max_created_at == null) continue
+      schemaAges.set(row.schema, new Date(row.max_created_at).getTime())
+    }
+
+    const { rows: activeRows } = await database.query<{ schema: string }>(getActivelyPromotedSchemasQuery())
+    const activeSchemas = new Set(activeRows.filter(row => row.schema).map(row => row.schema))
+
+    const runningServiceSchemas = new Set<string>()
+    for (const serviceName of runningServiceNames) {
+      const { rows } = await database.query<{ schema: string }>(getSchemaByServiceNameQuery(serviceName))
+      const latest = rows[0]?.schema
+      if (latest) runningServiceSchemas.add(latest)
+    }
+
+    const now = Date.now()
+    for (const schema of schemaNames) {
+      const createdAt = schemaAges.get(schema)
+      if (createdAt === undefined) {
+        // We didn't create it (no indexers row) — leave it alone entirely, don't even report.
+        continue
+      }
+      const ageMs = now - createdAt
+      if (ageMs < olderThanMs) continue
+
+      const entry = { database: databaseName, schema, ageMs }
+      const reason: PurgeSkipReason | undefined = activeSchemas.has(schema)
+        ? 'active'
+        : runningServiceSchemas.has(schema)
+          ? 'running-service'
+          : !SAFE_SCHEMA_NAME.test(schema)
+            ? 'invalid-name'
+            : undefined
+
+      if (reason) {
+        skipped.push({ ...entry, reason })
+        logger.debug('Skipped schema', { database: databaseName, schema, reason, ageMs })
+        continue
+      }
+
+      if (dryRun) {
+        logger.info('(dry-run) Would drop schema', { database: databaseName, schema, ageMs })
+        deleted.push(entry)
+        continue
+      }
+
+      try {
+        await database.withTransaction(async (pgClient: PoolClient) => {
+          await pgClient.query(buildDropSchemaStatement(schema))
+          await pgClient.query(getDeleteIndexersBySchemaQuery(schema))
+        })
+        logger.info('Dropped schema', { database: databaseName, schema, ageMs })
+        deleted.push(entry)
+      } catch (error) {
+        logger.error('Failed to drop schema', {
+          database: databaseName,
+          schema,
+          ageMs,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+
+    return { deleted, skipped }
+  }
+
+  /**
+   * Minimal ECS lookup for the subset of squid services that currently
+   * have a running task. Used as the "don't touch" filter for the purge.
+   *
+   * Correctness notes (this list must be complete — anything missing
+   * becomes a deletion candidate):
+   *   - `ListServices` is paginated via `nextToken` so clusters larger
+   *     than one page of 100 services are still fully enumerated.
+   *   - `DescribeServices` accepts at most 10 service ARNs per call
+   *     (AWS hard limit), so we chunk the ARNs into groups of 10.
+   *
+   * `list()` could supply the same information, but it additionally
+   * describes every task and fetches Prometheus metrics over HTTP per
+   * network. That's expensive and unnecessary here, and it also makes
+   * the purge tests combinatorially harder to set up.
+   */
+  async function getRunningSquidServiceNames(): Promise<string[]> {
+    const DESCRIBE_SERVICES_CHUNK_SIZE = 10
+
+    const squidArns: string[] = []
+    let nextToken: string | undefined
+    do {
+      const response = await client.send(new ListServicesCommand({ cluster, maxResults: 100, nextToken }))
+      for (const arn of response.serviceArns ?? []) {
+        if (arn.includes('-squid-server')) squidArns.push(arn)
+      }
+      nextToken = response.nextToken
+    } while (nextToken)
+
+    if (squidArns.length === 0) return []
+
+    const services: Array<{ serviceName?: string }> = []
+    for (let i = 0; i < squidArns.length; i += DESCRIBE_SERVICES_CHUNK_SIZE) {
+      const chunk = squidArns.slice(i, i + DESCRIBE_SERVICES_CHUNK_SIZE)
+      const response = await client.send(new DescribeServicesCommand({ cluster, services: chunk }))
+      services.push(...(response.services ?? []))
+    }
+
+    const running: string[] = []
+    await Promise.all(
+      services.map(async svc => {
+        const serviceName = svc.serviceName
+        if (!serviceName) return
+        const { taskArns = [] } = await client.send(new ListTasksCommand({ cluster, serviceName }))
+        if (taskArns.length > 0) running.push(serviceName)
+      })
+    )
+    return running
+  }
+
+  /**
+   * Entry point for the schema purge. Enforces the safety rails
+   * documented on `ISquidComponent.purgeOldSchemas` and dispatches to
+   * `purgeSchemasInDatabase` for each of the two databases.
+   *
+   * Logging summary:
+   *   - `warn` — aborting because ECS couldn't be queried or returned no
+   *     running services.
+   *   - `error` — processing a whole database failed (transport-level,
+   *     not a single DROP) or a specific DROP threw.
+   *   - `info` — every drop (or would-drop, in dry-run) with schema,
+   *     database and age; and a final summary line with the totals.
+   *   - `debug` — every skip with the reason.
+   */
+  async function purgeOldSchemas({ olderThanMs, dryRun = false }: PurgeOptions): Promise<PurgeResult> {
+    if (olderThanMs <= 0) {
+      throw new Error(`purgeOldSchemas: olderThanMs must be positive (received ${olderThanMs})`)
+    }
+
+    // Safety rail: if we can't determine what is running, don't delete anything.
+    // An empty ECS response or a transient error must not be interpreted as "nothing is running".
+    let runningServiceNames: string[]
+    try {
+      runningServiceNames = await getRunningSquidServiceNames()
+    } catch (error) {
+      logger.warn('purgeOldSchemas: could not list running services — aborting as a safety measure', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return { dryRun, deleted: [], skipped: [] }
+    }
+    if (runningServiceNames.length === 0) {
+      logger.warn('purgeOldSchemas: no running squid services detected — aborting as a safety measure')
+      return { dryRun, deleted: [], skipped: [] }
+    }
+
+    const result: PurgeResult = { dryRun, deleted: [], skipped: [] }
+
+    for (const [name, database] of [
+      ['dapps', dappsDatabase],
+      ['credits', creditsDatabase]
+    ] as const) {
+      try {
+        const partial = await purgeSchemasInDatabase(name, database, runningServiceNames, olderThanMs, dryRun)
+        result.deleted.push(...partial.deleted)
+        result.skipped.push(...partial.skipped)
+      } catch (error) {
+        logger.error(`purgeOldSchemas: failed while processing ${name} database`, {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+
+    logger.info(
+      `purgeOldSchemas ${dryRun ? '(dry-run) would delete' : 'deleted'} ${result.deleted.length} schema(s); skipped ${result.skipped.length}`
+    )
+    return result
+  }
+
   return {
     list,
     promote,
-    downgrade
+    downgrade,
+    purgeOldSchemas
   }
 }

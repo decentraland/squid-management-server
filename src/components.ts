@@ -79,6 +79,45 @@ export async function initComponents(): Promise<AppComponents> {
     }
   })
 
+  const ONE_HOUR_MS = 60 * 60 * 1000
+  const ONE_DAY_MS = 24 * ONE_HOUR_MS
+  const FIVE_MINUTES_MS = 5 * 60 * 1000
+  const DEFAULT_SCHEMA_PURGE_INTERVAL_HOURS = 24
+  const schemaPurgeLogger = logs.getLogger('schema-purge-job')
+  const schemaPurgeMaxAgeDays = await config.getNumber('SCHEMA_PURGE_MAX_AGE_DAYS')
+  const schemaPurgeOlderThanMs = schemaPurgeMaxAgeDays && schemaPurgeMaxAgeDays > 0 ? schemaPurgeMaxAgeDays * ONE_DAY_MS : undefined
+  const configuredIntervalHours = await config.getNumber('SCHEMA_PURGE_INTERVAL_HOURS')
+  const schemaPurgeIntervalHours =
+    configuredIntervalHours && configuredIntervalHours > 0 ? configuredIntervalHours : DEFAULT_SCHEMA_PURGE_INTERVAL_HOURS
+  const schemaPurgeIntervalMs = schemaPurgeIntervalHours * ONE_HOUR_MS
+  if (schemaPurgeOlderThanMs === undefined) {
+    schemaPurgeLogger.info('SCHEMA_PURGE_MAX_AGE_DAYS not set or non-positive; schema purge job is disabled')
+  } else {
+    schemaPurgeLogger.info(
+      `Schema purge enabled: schemas older than ${schemaPurgeMaxAgeDays} day(s), running every ${schemaPurgeIntervalHours} hour(s)`
+    )
+  }
+  const schemaPurgeJob = createJobComponent(
+    { logs },
+    async () => {
+      if (schemaPurgeOlderThanMs === undefined) return
+      const result = await squids.purgeOldSchemas({ olderThanMs: schemaPurgeOlderThanMs })
+      schemaPurgeLogger.info(`Schema purge: deleted ${result.deleted.length}, skipped ${result.skipped.length}`, {
+        deleted: JSON.stringify(result.deleted),
+        skipped: JSON.stringify(result.skipped)
+      })
+    },
+    schemaPurgeIntervalMs,
+    {
+      repeat: true,
+      // Delay the first run so it doesn't race with the rest of startup.
+      startupDelay: FIVE_MINUTES_MS,
+      onError: error => {
+        schemaPurgeLogger.error('Schema purge job failed', { error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  )
+
   return {
     config,
     logs,
@@ -89,6 +128,7 @@ export async function initComponents(): Promise<AppComponents> {
     metrics,
     squids,
     slack,
-    squidMonitorJob
+    squidMonitorJob,
+    schemaPurgeJob
   }
 }

@@ -11,42 +11,40 @@ import {
 } from '../../src/ports/job/squid-monitor'
 import { ISquidComponent, Squid, SquidMetric } from '../../src/ports/squids/types'
 
+type SendMessageCall = [{ text: string; blocks?: SlackMessageBlock[] }]
+
 describe('Squid Monitor', () => {
   let logsMock: ILoggerComponent
-  let loggerMock: { info: jest.Mock; error: jest.Mock; warn: jest.Mock }
+  let loggerMock: { info: jest.Mock; error: jest.Mock; warn: jest.Mock; debug: jest.Mock }
   let squidsMock: ISquidComponent
   let configMock: IConfigComponent
   let slackComponentMock: ISlackComponent
-  let mockSquids: Squid[]
   let monitorSquids: () => Promise<void>
 
   beforeEach(() => {
-    // Clear throttle state before each test
     clearNoMetricsThrottleState()
 
-    // Mock the logger
     loggerMock = {
       info: jest.fn(),
       error: jest.fn(),
-      warn: jest.fn()
+      warn: jest.fn(),
+      debug: jest.fn()
     }
     logsMock = {
       getLogger: jest.fn().mockReturnValue(loggerMock)
     }
 
-    // Mock the squids component
     squidsMock = {
       list: jest.fn().mockResolvedValue([]),
       downgrade: jest.fn(),
-      promote: jest.fn()
+      promote: jest.fn(),
+      purgeOldSchemas: jest.fn()
     }
 
-    // Mock the Slack component
     slackComponentMock = {
       sendMessage: jest.fn()
     }
 
-    // Mock the config component
     configMock = {
       getString: jest.fn().mockImplementation((key: string) => {
         if (key === 'ENV') {
@@ -56,300 +54,135 @@ describe('Squid Monitor', () => {
       })
     } as unknown as IConfigComponent
 
-    // Create test squids
-    mockSquids = [
-      {
-        name: 'Squid Without ETA',
-        service_name: 'squid-without-eta',
-        schema_name: 'active-schema',
-        project_active_schema: 'active-schema',
-        created_at: undefined,
-        health_status: undefined,
-        service_status: undefined,
-        version: 1,
-        metrics: {
-          [Network.ETHEREUM]: {
-            sqd_processor_sync_eta_seconds: null as unknown as number,
-            sqd_processor_last_block: 1000,
-            sqd_processor_chain_height: 1010,
-            sqd_processor_mapping_blocks_per_second: 5
-          },
-          [Network.MATIC]: {
-            sqd_processor_sync_eta_seconds: undefined as unknown as number,
-            sqd_processor_last_block: 2000,
-            sqd_processor_chain_height: 2010,
-            sqd_processor_mapping_blocks_per_second: 7
-          }
-        }
-      },
-      {
-        name: 'Squid Without Metrics',
-        service_name: 'squid-without-metrics',
-        schema_name: 'active-schema',
-        project_active_schema: 'active-schema',
-        created_at: undefined,
-        health_status: undefined,
-        service_status: undefined,
-        version: 1,
-        metrics: {
-          [Network.ETHEREUM]: undefined,
-          [Network.MATIC]: undefined
-        } as unknown as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
-      },
-      {
-        name: 'Out of Sync Squid',
-        service_name: 'out-of-sync-squid',
-        schema_name: 'active-schema',
-        project_active_schema: 'active-schema',
-        created_at: undefined,
-        health_status: undefined,
-        service_status: undefined,
-        version: 1,
-        metrics: {
-          [Network.ETHEREUM]: {
-            sqd_processor_sync_eta_seconds: ETA_CONSIDERED_OUT_OF_SYNC + 5,
-            sqd_processor_last_block: 1000,
-            sqd_processor_chain_height: 1020,
-            sqd_processor_mapping_blocks_per_second: 8
-          },
-          [Network.MATIC]: {
-            sqd_processor_sync_eta_seconds: 5,
-            sqd_processor_last_block: 2000,
-            sqd_processor_chain_height: 2005,
-            sqd_processor_mapping_blocks_per_second: 12
-          }
-        }
-      },
-      {
-        name: 'Synchronized Squid',
-        service_name: 'synchronized-squid',
-        schema_name: 'active-schema',
-        project_active_schema: 'active-schema',
-        created_at: undefined,
-        health_status: undefined,
-        service_status: undefined,
-        version: 1,
-        metrics: {
-          [Network.ETHEREUM]: {
-            sqd_processor_sync_eta_seconds: 5,
-            sqd_processor_last_block: 1000,
-            sqd_processor_chain_height: 1005,
-            sqd_processor_mapping_blocks_per_second: 10
-          },
-          [Network.MATIC]: {
-            sqd_processor_sync_eta_seconds: 3,
-            sqd_processor_last_block: 2000,
-            sqd_processor_chain_height: 2002,
-            sqd_processor_mapping_blocks_per_second: 15
-          }
-        }
-      }
-    ]
-
-    // Configure development environment for tests
     process.env.ENV = 'prd'
     process.env.USE_MOCK_SQUIDS = 'false'
     delete process.env.FORCE_ETA_UNAVAILABLE
   })
 
   afterEach(() => {
-    // Clean all mocks
     jest.clearAllMocks()
   })
 
   describe('monitorSquids', () => {
     beforeEach(async () => {
-      const components = { logs: logsMock, squids: squidsMock, config: configMock, slack: slackComponentMock }
-      monitorSquids = await createSquidMonitor(components)
+      monitorSquids = await createSquidMonitor({ logs: logsMock, squids: squidsMock, config: configMock, slack: slackComponentMock })
     })
 
-    describe('when squids have undefined or null ETA', () => {
-      beforeEach(() => {
-        // Configure the mock to return a squid with unavailable ETA
-        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[0]])
-      })
+    describe('when the active squid has undefined or null ETA on both networks', () => {
+      let sendMessageCalls: SendMessageCall[]
 
-      it('should send alerts for each network with unavailable ETA', async () => {
-        // Execute the monitoring function
+      beforeEach(async () => {
+        const squidWithoutEta: Squid = {
+          name: 'Squid Without ETA',
+          service_name: 'squid-without-eta',
+          schema_name: 'active-schema',
+          project_active_schema: 'active-schema',
+          created_at: undefined,
+          health_status: undefined,
+          service_status: undefined,
+          version: 1,
+          metrics: {
+            [Network.ETHEREUM]: {
+              sqd_processor_sync_eta_seconds: null as unknown as number,
+              sqd_processor_last_block: 1000,
+              sqd_processor_chain_height: 1010,
+              sqd_processor_mapping_blocks_per_second: 5
+            },
+            [Network.MATIC]: {
+              sqd_processor_sync_eta_seconds: undefined as unknown as number,
+              sqd_processor_last_block: 2000,
+              sqd_processor_chain_height: 2010,
+              sqd_processor_mapping_blocks_per_second: 7
+            }
+          }
+        }
+        squidsMock.list = jest.fn().mockResolvedValue([squidWithoutEta])
+
         await monitorSquids()
-
-        // Verify that sendMessage was called for the squid without ETA (twice, once for each network)
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(2)
-
-        // Verify that the messages contain the correct information for unavailable ETA
-        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
-
-        // Verify that at least one of the messages is for unavailable ETA on Ethereum
-        const etaUnavailableEthereumCall = calls.find(
-          (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
-            call[0].text && call[0].text.includes('Cannot read ETA') && call[0].text.includes('ETHEREUM')
-        )
-        expect(etaUnavailableEthereumCall).toBeTruthy()
-
-        // Verify that at least one of the messages is for unavailable ETA on Matic
-        const etaUnavailableMaticCall = calls.find(
-          (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
-            call[0].text && call[0].text.includes('Cannot read ETA') && call[0].text.includes('MATIC')
-        )
-        expect(etaUnavailableMaticCall).toBeTruthy()
-      })
-    })
-
-    describe('when squids have ETA > ETA_CONSIDERED_OUT_OF_SYNC seconds', () => {
-      beforeEach(() => {
-        // Configure the mock to return an out of sync squid
-        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[2]])
+        sendMessageCalls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
       })
 
-      it('should send alerts for networks with ETA > ETA_CONSIDERED_OUT_OF_SYNC seconds', async () => {
-        // Execute the monitoring function
-        await monitorSquids()
+      it('should send one alert per network', () => {
+        expect(sendMessageCalls).toHaveLength(2)
+      })
 
-        // Verify that sendMessage was called for the out of sync squid (only on Ethereum)
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(1)
+      it('should send a "cannot read ETA" alert for Ethereum', () => {
+        const call = sendMessageCalls.find(c => c[0].text?.includes('Cannot read ETA') && c[0].text?.includes('ETHEREUM'))
+        expect(call).toBeTruthy()
+      })
 
-        // Verify that the messages contain the correct information for desynchronization
-        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
-
-        // Verify that the message is for desynchronization on Ethereum
-        const desyncCall = calls.find(
-          (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
-            call[0].text && call[0].text.includes('out of sync') && call[0].text.includes('ETHEREUM')
-        )
-        expect(desyncCall).toBeTruthy()
-
-        // Verify that the message contains the correct information
-        expect(
-          desyncCall &&
-            desyncCall[0].blocks?.some(
-              (block: SlackMessageBlock) =>
-                block.type === 'section' &&
-                block.fields &&
-                block.fields.some(field => field.text.includes('Current ETA') && field.text.includes('5 seconds'))
-            )
-        ).toBeTruthy()
+      it('should send a "cannot read ETA" alert for Matic', () => {
+        const call = sendMessageCalls.find(c => c[0].text?.includes('Cannot read ETA') && c[0].text?.includes('MATIC'))
+        expect(call).toBeTruthy()
       })
     })
 
-    describe('when squids have ETA <= 10 seconds', () => {
-      beforeEach(() => {
-        // Configure the mock to return a synchronized squid
-        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[3]])
+    describe('when the active squid is out of sync on Ethereum only', () => {
+      let sendMessageCalls: SendMessageCall[]
+
+      beforeEach(async () => {
+        const outOfSyncSquid: Squid = {
+          name: 'Out of Sync Squid',
+          service_name: 'out-of-sync-squid',
+          schema_name: 'active-schema',
+          project_active_schema: 'active-schema',
+          created_at: undefined,
+          health_status: undefined,
+          service_status: undefined,
+          version: 1,
+          metrics: {
+            [Network.ETHEREUM]: {
+              sqd_processor_sync_eta_seconds: ETA_CONSIDERED_OUT_OF_SYNC + 5,
+              sqd_processor_last_block: 1000,
+              sqd_processor_chain_height: 1020,
+              sqd_processor_mapping_blocks_per_second: 8
+            },
+            [Network.MATIC]: {
+              sqd_processor_sync_eta_seconds: 5,
+              sqd_processor_last_block: 2000,
+              sqd_processor_chain_height: 2005,
+              sqd_processor_mapping_blocks_per_second: 12
+            }
+          }
+        }
+        squidsMock.list = jest.fn().mockResolvedValue([outOfSyncSquid])
+
+        await monitorSquids()
+        sendMessageCalls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
       })
 
-      it('should not send any alerts', async () => {
-        // Execute the monitoring function
-        await monitorSquids()
+      it('should send exactly one alert', () => {
+        expect(sendMessageCalls).toHaveLength(1)
+      })
 
-        // Verify that no messages were sent
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
+      it('should send a desync alert for Ethereum', () => {
+        const call = sendMessageCalls.find(c => c[0].text?.includes('out of sync') && c[0].text?.includes('ETHEREUM'))
+        expect(call).toBeTruthy()
+      })
+
+      it('should include the current ETA value in the desync alert', () => {
+        const call = sendMessageCalls.find(c => c[0].text?.includes('out of sync') && c[0].text?.includes('ETHEREUM'))
+        const hasCurrentEta = call?.[0].blocks?.some(
+          block =>
+            block.type === 'section' &&
+            block.fields !== undefined &&
+            block.fields.some(field => field.text.includes('Current ETA') && field.text.includes('5 seconds'))
+        )
+        expect(hasCurrentEta).toBe(true)
       })
     })
 
-    describe('when squids have no metrics - throttling behavior', () => {
-      beforeEach(() => {
-        // Configure the mock to return a squid without metrics
-        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[1]]) // Squid Without Metrics
-      })
-
-      it('should not send alert on first detection of no metrics', async () => {
-        // Execute the monitoring function
-        await monitorSquids()
-
-        // Verify that no slack message was sent
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
-
-        // Verify that the issue was logged
-        expect(loggerMock.warn).toHaveBeenCalledWith('No metrics found for squid squid-without-metrics on network ETHEREUM')
-        expect(loggerMock.warn).toHaveBeenCalledWith('No metrics found for squid squid-without-metrics on network MATIC')
-
-        // Verify that the first detection was logged
-        expect(loggerMock.info).toHaveBeenCalledWith(
-          'First detection of no metrics for squid-without-metrics on ETHEREUM. Will send alert after 5 minutes.'
-        )
-        expect(loggerMock.info).toHaveBeenCalledWith(
-          'First detection of no metrics for squid-without-metrics on MATIC. Will send alert after 5 minutes.'
-        )
-
-        // Verify that the state is stored
-        expect(noMetricsFirstDetected.size).toBe(2)
-        expect(noMetricsFirstDetected.has('squid-without-metrics-ETHEREUM-no-metrics')).toBe(true)
-        expect(noMetricsFirstDetected.has('squid-without-metrics-MATIC-no-metrics')).toBe(true)
-      })
-
-      it('should send alert after 5 minutes have passed', async () => {
-        const fiveMinutesAgo = Date.now() - FIVE_MINUTES - 1000 // Add extra 1 second to ensure we're past the threshold
-
-        // Simulate that the issue was first detected 5+ minutes ago
-        noMetricsFirstDetected.set('squid-without-metrics-ETHEREUM-no-metrics', fiveMinutesAgo)
-        noMetricsFirstDetected.set('squid-without-metrics-MATIC-no-metrics', fiveMinutesAgo)
-
-        // Execute the monitoring function
-        await monitorSquids()
-
-        // Verify that slack messages were sent for both networks
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(2)
-
-        // Verify message content includes duration
-        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
-
-        // Check that both messages are for no metrics
-        const noMetricsCallEthereum = calls.find(
-          (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
-            call[0].text && call[0].text.includes('No metrics found') && call[0].text.includes('ETHEREUM')
-        )
-        expect(noMetricsCallEthereum).toBeTruthy()
-
-        const noMetricsCallMatic = calls.find(
-          (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
-            call[0].text && call[0].text.includes('No metrics found') && call[0].text.includes('MATIC')
-        )
-        expect(noMetricsCallMatic).toBeTruthy()
-
-        // Verify that the messages contain duration information
-        expect(
-          noMetricsCallEthereum &&
-            noMetricsCallEthereum[0].blocks?.some(
-              (block: SlackMessageBlock) =>
-                block.type === 'section' && block.text && block.text.text.includes('Issue duration:') && block.text.text.includes('minutes')
-            )
-        ).toBeTruthy()
-      })
-
-      it('should not send multiple alerts within 5 minutes after first alert', async () => {
-        const fiveMinutesAgo = Date.now() - FIVE_MINUTES - 1000
-
-        // Simulate that the issue was first detected 5+ minutes ago and alert was already sent
-        noMetricsFirstDetected.set('squid-without-metrics-ETHEREUM-no-metrics', fiveMinutesAgo)
-        noMetricsFirstDetected.set('squid-without-metrics-MATIC-no-metrics', fiveMinutesAgo)
-
-        // Execute monitoring (this should send alerts and reset timestamps)
-        await monitorSquids()
-
-        // Clear the mock call history
-        ;(slackComponentMock.sendMessage as jest.Mock).mockClear()
-
-        // Execute monitoring again immediately (should not send alerts)
-        await monitorSquids()
-
-        // Verify that no additional slack messages were sent
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
-      })
-
-      it('should clear throttle state when metrics are recovered', async () => {
-        // First, establish that no metrics were detected
-        noMetricsFirstDetected.set('squid-without-metrics-ETHEREUM-no-metrics', Date.now())
-        noMetricsFirstDetected.set('squid-without-metrics-MATIC-no-metrics', Date.now())
-
-        // Now provide a squid with metrics
-        const squidWithRecoveredMetrics = {
-          ...mockSquids[1],
+    describe('when every active squid has an ETA at or below the threshold', () => {
+      beforeEach(async () => {
+        const synchronizedSquid: Squid = {
+          name: 'Synchronized Squid',
+          service_name: 'synchronized-squid',
+          schema_name: 'active-schema',
+          project_active_schema: 'active-schema',
+          created_at: undefined,
+          health_status: undefined,
+          service_status: undefined,
+          version: 1,
           metrics: {
             [Network.ETHEREUM]: {
               sqd_processor_sync_eta_seconds: 5,
@@ -365,18 +198,184 @@ describe('Squid Monitor', () => {
             }
           }
         }
+        squidsMock.list = jest.fn().mockResolvedValue([synchronizedSquid])
 
-        squidsMock.list = jest.fn().mockResolvedValue([squidWithRecoveredMetrics])
-
-        // Execute the monitoring function
         await monitorSquids()
+      })
 
-        // Verify that the throttle state was cleared
+      it('should not send any slack alerts', () => {
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
+      })
+    })
+
+    describe('when the active squid has no metrics on either network', () => {
+      const serviceName = 'squid-without-metrics'
+      const ethereumKey = `${serviceName}-ETHEREUM-no-metrics`
+      const maticKey = `${serviceName}-MATIC-no-metrics`
+
+      let squidWithoutMetrics: Squid
+
+      beforeEach(() => {
+        squidWithoutMetrics = {
+          name: 'Squid Without Metrics',
+          service_name: serviceName,
+          schema_name: 'active-schema',
+          project_active_schema: 'active-schema',
+          created_at: undefined,
+          health_status: undefined,
+          service_status: undefined,
+          version: 1,
+          metrics: {
+            [Network.ETHEREUM]: undefined,
+            [Network.MATIC]: undefined
+          } as unknown as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
+        }
+        squidsMock.list = jest.fn().mockResolvedValue([squidWithoutMetrics])
+      })
+
+      describe('and it is the first detection', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+        })
+
+        it('should not send any slack alerts', () => {
+          // eslint-disable-next-line @typescript-eslint/unbound-method
+          expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
+        })
+
+        it('should warn that metrics are missing on Ethereum', () => {
+          expect(loggerMock.warn).toHaveBeenCalledWith(`No metrics found for squid ${serviceName} on network ETHEREUM`)
+        })
+
+        it('should warn that metrics are missing on Matic', () => {
+          expect(loggerMock.warn).toHaveBeenCalledWith(`No metrics found for squid ${serviceName} on network MATIC`)
+        })
+
+        it('should log that it will send an alert after 5 minutes for Ethereum', () => {
+          expect(loggerMock.info).toHaveBeenCalledWith(
+            `First detection of no metrics for ${serviceName} on ETHEREUM. Will send alert after 5 minutes.`
+          )
+        })
+
+        it('should log that it will send an alert after 5 minutes for Matic', () => {
+          expect(loggerMock.info).toHaveBeenCalledWith(
+            `First detection of no metrics for ${serviceName} on MATIC. Will send alert after 5 minutes.`
+          )
+        })
+
+        it('should record the first-detection timestamp for both networks', () => {
+          expect(noMetricsFirstDetected.size).toBe(2)
+          expect(noMetricsFirstDetected.has(ethereumKey)).toBe(true)
+          expect(noMetricsFirstDetected.has(maticKey)).toBe(true)
+        })
+      })
+
+      describe('and more than 5 minutes have passed since the first detection', () => {
+        let sendMessageCalls: SendMessageCall[]
+
+        beforeEach(async () => {
+          const fiveMinutesAgo = Date.now() - FIVE_MINUTES - 1000
+          noMetricsFirstDetected.set(ethereumKey, fiveMinutesAgo)
+          noMetricsFirstDetected.set(maticKey, fiveMinutesAgo)
+
+          await monitorSquids()
+          sendMessageCalls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
+        })
+
+        it('should send one slack alert per network', () => {
+          expect(sendMessageCalls).toHaveLength(2)
+        })
+
+        it('should send a "no metrics found" alert for Ethereum', () => {
+          const call = sendMessageCalls.find(c => c[0].text?.includes('No metrics found') && c[0].text?.includes('ETHEREUM'))
+          expect(call).toBeTruthy()
+        })
+
+        it('should send a "no metrics found" alert for Matic', () => {
+          const call = sendMessageCalls.find(c => c[0].text?.includes('No metrics found') && c[0].text?.includes('MATIC'))
+          expect(call).toBeTruthy()
+        })
+
+        it('should include the issue duration in the Ethereum alert', () => {
+          const call = sendMessageCalls.find(c => c[0].text?.includes('No metrics found') && c[0].text?.includes('ETHEREUM'))
+          const hasDuration = call?.[0].blocks?.some(
+            block =>
+              block.type === 'section' &&
+              block.text !== undefined &&
+              block.text.text.includes('Issue duration:') &&
+              block.text.text.includes('minutes')
+          )
+          expect(hasDuration).toBe(true)
+        })
+      })
+
+      describe('and an alert was just sent in the previous tick', () => {
+        beforeEach(async () => {
+          const fiveMinutesAgo = Date.now() - FIVE_MINUTES - 1000
+          noMetricsFirstDetected.set(ethereumKey, fiveMinutesAgo)
+          noMetricsFirstDetected.set(maticKey, fiveMinutesAgo)
+
+          await monitorSquids()
+          ;(slackComponentMock.sendMessage as jest.Mock).mockClear()
+
+          await monitorSquids()
+        })
+
+        it('should not send any additional slack alerts on the second run', () => {
+          // eslint-disable-next-line @typescript-eslint/unbound-method
+          expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
+        })
+      })
+    })
+
+    describe('when a previously-alerting squid reports metrics again', () => {
+      const serviceName = 'squid-without-metrics'
+      const ethereumKey = `${serviceName}-ETHEREUM-no-metrics`
+      const maticKey = `${serviceName}-MATIC-no-metrics`
+
+      beforeEach(async () => {
+        const recoveredSquid: Squid = {
+          name: 'Squid Without Metrics',
+          service_name: serviceName,
+          schema_name: 'active-schema',
+          project_active_schema: 'active-schema',
+          created_at: undefined,
+          health_status: undefined,
+          service_status: undefined,
+          version: 1,
+          metrics: {
+            [Network.ETHEREUM]: {
+              sqd_processor_sync_eta_seconds: 5,
+              sqd_processor_last_block: 1000,
+              sqd_processor_chain_height: 1005,
+              sqd_processor_mapping_blocks_per_second: 10
+            },
+            [Network.MATIC]: {
+              sqd_processor_sync_eta_seconds: 3,
+              sqd_processor_last_block: 2000,
+              sqd_processor_chain_height: 2002,
+              sqd_processor_mapping_blocks_per_second: 15
+            }
+          }
+        }
+        noMetricsFirstDetected.set(ethereumKey, Date.now())
+        noMetricsFirstDetected.set(maticKey, Date.now())
+        squidsMock.list = jest.fn().mockResolvedValue([recoveredSquid])
+
+        await monitorSquids()
+      })
+
+      it('should clear the throttle state for both networks', () => {
         expect(noMetricsFirstDetected.size).toBe(0)
+      })
 
-        // Verify that recovery was logged
-        expect(loggerMock.info).toHaveBeenCalledWith('Metrics recovered for squid-without-metrics on ETHEREUM. Clearing throttle state.')
-        expect(loggerMock.info).toHaveBeenCalledWith('Metrics recovered for squid-without-metrics on MATIC. Clearing throttle state.')
+      it('should log that metrics recovered for Ethereum', () => {
+        expect(loggerMock.info).toHaveBeenCalledWith(`Metrics recovered for ${serviceName} on ETHEREUM. Clearing throttle state.`)
+      })
+
+      it('should log that metrics recovered for Matic', () => {
+        expect(loggerMock.info).toHaveBeenCalledWith(`Metrics recovered for ${serviceName} on MATIC. Clearing throttle state.`)
       })
     })
   })

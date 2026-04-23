@@ -113,3 +113,57 @@ export const getActiveSchemaQuery = (serviceName: string): SQLStatement => {
       WHERE name = ${projectName};
   `
 }
+
+/**
+ * Lists every schema in the database whose name starts with `squid_`.
+ * Used by the purge job to enumerate candidates before filtering by age and usage.
+ *
+ * Uses a POSIX regex (`~`) rather than `LIKE 'squid_%'` on purpose: in SQL
+ * `LIKE`, `_` is a single-character wildcard, so `'squid_%'` also matches e.g.
+ * `squida_foo`. The `SAFE_SCHEMA_NAME` regex in the component catches those as
+ * `invalid-name`, but narrowing the query itself avoids the wasted round-trip
+ * and removes an easy source of confusion.
+ */
+export const getSquidSchemasQuery = (): SQLStatement => SQL`
+  SELECT schema_name
+  FROM information_schema.schemata
+  WHERE schema_name ~ '^squid_';
+`
+
+/**
+ * For the supplied schema names, returns the most recent `indexers.created_at`
+ * per schema. The purge derives a schema's "age" from this value.
+ */
+export const getSchemaAgesQuery = (schemaNames: string[]): SQLStatement => SQL`
+  SELECT schema, MAX(created_at) AS max_created_at
+  FROM public.indexers
+  WHERE schema = ANY(${schemaNames})
+  GROUP BY schema;
+`
+
+/**
+ * Returns the schema currently promoted for every project, i.e. the schemas
+ * actively being read from. These must never be dropped.
+ */
+export const getActivelyPromotedSchemasQuery = (): SQLStatement => SQL`
+  SELECT schema
+  FROM public.squids;
+`
+
+/**
+ * Builds the `DROP SCHEMA <name> CASCADE` statement. Returned as a plain string
+ * (not a SQLStatement) because `<name>` is an identifier, not a parameterisable
+ * value — it is safely escaped with pg's `escapeIdentifier` before being
+ * interpolated. Callers must still gate the schema name with their own
+ * validation before invoking this helper.
+ */
+export const buildDropSchemaStatement = (schemaName: string): string => `DROP SCHEMA ${escapeIdentifier(schemaName)} CASCADE`
+
+/**
+ * Removes every indexers row that references the given schema. Run inside the
+ * same transaction as the corresponding DROP so the deployment history is
+ * consistent with the live schema catalog.
+ */
+export const getDeleteIndexersBySchemaQuery = (schemaName: string): SQLStatement => SQL`
+  DELETE FROM public.indexers WHERE schema = ${schemaName};
+`
