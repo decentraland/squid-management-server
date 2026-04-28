@@ -11,7 +11,7 @@ import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known
 import { IPgComponent } from '@dcl/pg-component'
 import { Network } from '@dcl/schemas'
 import { getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
-import { ISquidComponent, Squid, SquidMetric } from './types'
+import { ISquidComponent, IsLiveResult, Squid, SquidMetric } from './types'
 import { getMetricValue, getProjectNameFromService, getSquidsNetworksMapping } from './utils'
 
 const AWS_REGION = 'us-east-1'
@@ -237,9 +237,31 @@ export async function createSubsquidComponent({
     }
   }
 
+  /**
+   * Returns whether `serviceName` is currently the LIVE indexer for its project.
+   * "Live" = its most recent indexers row's schema matches the project's promoted
+   * schema in the squids table (the schema the API actually queries).
+   *
+   * Returns { live: false, schema: null, activeSchema: null } if the service has
+   * no indexers row or the project has no entry in the squids table — "not live"
+   * is the safe default.
+   */
+  async function isLive(serviceName: string): Promise<IsLiveResult> {
+    const database = getDatabaseFromServiceName(serviceName)
+    const [schemaRes, activeRes] = await Promise.all([
+      database.query<{ schema: string }>(getSchemaByServiceNameQuery(serviceName)),
+      database.query<{ schema: string }>(getActiveSchemaQuery(serviceName))
+    ])
+    const schema = schemaRes.rows[0]?.schema ?? null
+    const activeSchema = activeRes.rows[0]?.schema ?? null
+    const live = schema !== null && activeSchema !== null && schema === activeSchema
+    return { live, schema, activeSchema }
+  }
+
   return {
     list,
     promote,
-    downgrade
+    downgrade,
+    isLive
   }
 }

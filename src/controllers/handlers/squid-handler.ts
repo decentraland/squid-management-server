@@ -37,6 +37,29 @@ export async function stopSquidHandler(context: Pick<HandlerContextWithPath<'squ
   }
 }
 
+export async function isLiveSquidHandler(context: Pick<HandlerContextWithPath<'squids', '/squids/:id/is-live'>, 'params' | 'components'>) {
+  const {
+    components: { squids },
+    params: { id }
+  } = context
+
+  try {
+    const result = await squids.isLive(id)
+    return {
+      status: StatusCode.OK,
+      body: result
+    }
+  } catch (e) {
+    console.error('error: ', e)
+    return {
+      status: StatusCode.BAD_REQUEST,
+      body: {
+        message: isErrorWithMessage(e) ? e.message : 'Could not determine live status'
+      }
+    }
+  }
+}
+
 export async function promoteSquidHandler(context: Pick<HandlerContextWithPath<'squids', '/squids/:id/promote'>, 'params' | 'components'>) {
   const {
     components: { squids },
