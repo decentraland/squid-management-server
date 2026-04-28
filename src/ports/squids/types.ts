@@ -21,8 +21,15 @@ export type Squid = {
   metrics: Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
 }
 
+export type IsLiveResult = {
+  live: boolean
+  schema: string | null
+  activeSchema: string | null
+}
+
 export type ISquidComponent = {
   list(): Promise<Squid[]>
   downgrade(serviceName: string): Promise<void>
   promote(serviceName: string): Promise<void>
+  isLive(serviceName: string): Promise<IsLiveResult>
 }
