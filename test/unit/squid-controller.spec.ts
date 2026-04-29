@@ -118,10 +118,15 @@ describe('createSubsquidComponent', () => {
   })
 
   describe('isLive', () => {
-    it('returns live=true when latest indexer schema matches the project active schema', async () => {
+    it('returns live=true when one of the slot services has its latest schema matching the active schema', async () => {
       ;(dappsDatabaseMock.query as jest.Mock)
-        .mockResolvedValueOnce({ rows: [{ schema: 'marketplace_squid_20250101' }] }) // getSchemaByServiceNameQuery
-        .mockResolvedValueOnce({ rows: [{ schema: 'marketplace_squid_20250101' }] }) // getActiveSchemaQuery
+        .mockResolvedValueOnce({ rows: [{ schema: 'marketplace_squid_20250101' }] }) // getActiveSchemaByProjectQuery
+        .mockResolvedValueOnce({
+          rows: [
+            { service: 'marketplace-squid-server-a-blue-92e812a', schema: 'marketplace_squid_20250101' },
+            { service: 'marketplace-squid-server-a-green-abc1234', schema: 'marketplace_squid_20250105' }
+          ]
+        }) // getLatestSlotServicesQuery
 
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
@@ -131,19 +136,25 @@ describe('createSubsquidComponent', () => {
         logs: logsMock
       })
 
-      const result = await subsquid.isLive('marketplace-squid-server-a')
+      const result = await subsquid.isLive('marketplace', 'a')
 
       expect(result).toEqual({
         live: true,
-        schema: 'marketplace_squid_20250101',
-        activeSchema: 'marketplace_squid_20250101'
+        activeSchema: 'marketplace_squid_20250101',
+        liveService: 'marketplace-squid-server-a-blue-92e812a',
+        services: [
+          { service: 'marketplace-squid-server-a-blue-92e812a', schema: 'marketplace_squid_20250101' },
+          { service: 'marketplace-squid-server-a-green-abc1234', schema: 'marketplace_squid_20250105' }
+        ]
       })
     })
 
-    it('returns live=false when schemas differ', async () => {
+    it('returns live=false when no slot service matches the active schema', async () => {
       ;(dappsDatabaseMock.query as jest.Mock)
-        .mockResolvedValueOnce({ rows: [{ schema: 'marketplace_squid_20250105' }] })
         .mockResolvedValueOnce({ rows: [{ schema: 'marketplace_squid_20250101' }] })
+        .mockResolvedValueOnce({
+          rows: [{ service: 'marketplace-squid-server-b-blue-1', schema: 'marketplace_squid_20250105' }]
+        })
 
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
@@ -153,19 +164,42 @@ describe('createSubsquidComponent', () => {
         logs: logsMock
       })
 
-      const result = await subsquid.isLive('marketplace-squid-server-a')
+      const result = await subsquid.isLive('marketplace', 'b')
+
+      expect(result.live).toBe(false)
+      expect(result.liveService).toBeNull()
+      expect(result.activeSchema).toBe('marketplace_squid_20250101')
+    })
+
+    it('returns live=false when project has no entry in squids table', async () => {
+      ;(dappsDatabaseMock.query as jest.Mock)
+        .mockResolvedValueOnce({ rows: [] }) // no active schema
+        .mockResolvedValueOnce({
+          rows: [{ service: 'marketplace-squid-server-a-blue-1', schema: 'marketplace_squid_20250101' }]
+        })
+
+      const subsquid = await createSubsquidComponent({
+        fetch: fetchMock,
+        dappsDatabase: dappsDatabaseMock,
+        creditsDatabase: creditsDatabaseMock,
+        config: configMock,
+        logs: logsMock
+      })
+
+      const result = await subsquid.isLive('marketplace', 'a')
 
       expect(result).toEqual({
         live: false,
-        schema: 'marketplace_squid_20250105',
-        activeSchema: 'marketplace_squid_20250101'
+        activeSchema: null,
+        liveService: null,
+        services: [{ service: 'marketplace-squid-server-a-blue-1', schema: 'marketplace_squid_20250101' }]
       })
     })
 
-    it('returns live=false with null fields when service has no indexer row', async () => {
+    it('returns live=false with empty services when slot has no indexer rows', async () => {
       ;(dappsDatabaseMock.query as jest.Mock)
-        .mockResolvedValueOnce({ rows: [] }) // no indexer row
         .mockResolvedValueOnce({ rows: [{ schema: 'marketplace_squid_20250101' }] })
+        .mockResolvedValueOnce({ rows: [] })
 
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
@@ -175,19 +209,20 @@ describe('createSubsquidComponent', () => {
         logs: logsMock
       })
 
-      const result = await subsquid.isLive('marketplace-squid-server-a')
+      const result = await subsquid.isLive('marketplace', 'a')
 
       expect(result).toEqual({
         live: false,
-        schema: null,
-        activeSchema: 'marketplace_squid_20250101'
+        activeSchema: 'marketplace_squid_20250101',
+        liveService: null,
+        services: []
       })
     })
 
-    it('routes to creditsDatabase for credits-squid services', async () => {
-      ;(creditsDatabaseMock.query as jest.Mock)
-        .mockResolvedValueOnce({ rows: [{ schema: 'credits_squid_x' }] })
-        .mockResolvedValueOnce({ rows: [{ schema: 'credits_squid_x' }] })
+    it('routes to creditsDatabase when project is "credits"', async () => {
+      ;(creditsDatabaseMock.query as jest.Mock).mockResolvedValueOnce({ rows: [{ schema: 'squid_credits' }] }).mockResolvedValueOnce({
+        rows: [{ service: 'credits-squid-server-a-blue-1', schema: 'squid_credits' }]
+      })
 
       const subsquid = await createSubsquidComponent({
         fetch: fetchMock,
@@ -197,7 +232,7 @@ describe('createSubsquidComponent', () => {
         logs: logsMock
       })
 
-      const result = await subsquid.isLive('credits-squid-server-a')
+      const result = await subsquid.isLive('credits', 'a')
 
       expect(result.live).toBe(true)
       // eslint-disable-next-line @typescript-eslint/unbound-method

@@ -10,7 +10,13 @@ import {
 import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
 import { IPgComponent } from '@dcl/pg-component'
 import { Network } from '@dcl/schemas'
-import { getActiveSchemaQuery, getPromoteQuery, getSchemaByServiceNameQuery } from './queries'
+import {
+  getActiveSchemaByProjectQuery,
+  getActiveSchemaQuery,
+  getLatestSlotServicesQuery,
+  getPromoteQuery,
+  getSchemaByServiceNameQuery
+} from './queries'
 import { ISquidComponent, IsLiveResult, Squid, SquidMetric } from './types'
 import { getMetricValue, getProjectNameFromService, getSquidsNetworksMapping } from './utils'
 
@@ -238,24 +244,34 @@ export async function createSubsquidComponent({
   }
 
   /**
-   * Returns whether `serviceName` is currently the LIVE indexer for its project.
-   * "Live" = its most recent indexers row's schema matches the project's promoted
-   * schema in the squids table (the schema the API actually queries).
+   * Returns whether the given (project, slot) is currently serving as the LIVE
+   * indexer. A slot can have several ECS services running side-by-side during
+   * blue/green transitions (e.g., `marketplace-squid-server-a-blue-92e812a` and
+   * `marketplace-squid-server-a-green-abc1234` may coexist). The slot is LIVE if
+   * any of its services has its latest indexers.schema matching the project's
+   * promoted schema in the squids table.
    *
-   * Returns { live: false, schema: null, activeSchema: null } if the service has
-   * no indexers row or the project has no entry in the squids table — "not live"
-   * is the safe default.
+   * Returns live=false (safe default) if the project has no entry in `squids`
+   * or no service in the slot has an indexers row.
+   *
+   * `project` and `slot` are validated against a safe alphanumeric+hyphen charset
+   * upstream by the handler, since `slot` is interpolated into a LIKE pattern.
    */
-  async function isLive(serviceName: string): Promise<IsLiveResult> {
-    const database = getDatabaseFromServiceName(serviceName)
-    const [schemaRes, activeRes] = await Promise.all([
-      database.query<{ schema: string }>(getSchemaByServiceNameQuery(serviceName)),
-      database.query<{ schema: string }>(getActiveSchemaQuery(serviceName))
+  async function isLive(project: string, slot: string): Promise<IsLiveResult> {
+    const database = project === 'credits' ? creditsDatabase : dappsDatabase
+    const [activeRes, slotRes] = await Promise.all([
+      database.query<{ schema: string }>(getActiveSchemaByProjectQuery(project)),
+      database.query<{ service: string; schema: string }>(getLatestSlotServicesQuery(project, slot))
     ])
-    const schema = schemaRes.rows[0]?.schema ?? null
     const activeSchema = activeRes.rows[0]?.schema ?? null
-    const live = schema !== null && activeSchema !== null && schema === activeSchema
-    return { live, schema, activeSchema }
+    const services = slotRes.rows
+    const liveService = activeSchema ? (services.find(s => s.schema === activeSchema)?.service ?? null) : null
+    return {
+      live: liveService !== null,
+      activeSchema,
+      liveService,
+      services
+    }
   }
 
   return {
