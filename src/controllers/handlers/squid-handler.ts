@@ -37,14 +37,30 @@ export async function stopSquidHandler(context: Pick<HandlerContextWithPath<'squ
   }
 }
 
-export async function isLiveSquidHandler(context: Pick<HandlerContextWithPath<'squids', '/squids/:id/is-live'>, 'params' | 'components'>) {
+// Restricts URL params that are interpolated into a SQL LIKE pattern.
+// Allows lowercase letters, digits and hyphens only (Decentraland project + slot
+// identifiers are e.g. "marketplace", "trades", "credits", "a", "b").
+const SAFE_PARAM_RE = /^[a-z0-9-]+$/
+
+export async function isLiveSquidHandler(
+  context: Pick<HandlerContextWithPath<'squids', '/:project/:slot/is-live'>, 'params' | 'components'>
+) {
   const {
     components: { squids },
-    params: { id }
+    params: { project, slot }
   } = context
 
+  if (!SAFE_PARAM_RE.test(project) || !SAFE_PARAM_RE.test(slot)) {
+    return {
+      status: StatusCode.BAD_REQUEST,
+      body: {
+        message: 'Invalid project or slot. Allowed: lowercase letters, digits, hyphen.'
+      }
+    }
+  }
+
   try {
-    const result = await squids.isLive(id)
+    const result = await squids.isLive(project, slot)
     return {
       status: StatusCode.OK,
       body: result

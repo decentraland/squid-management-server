@@ -39,7 +39,7 @@ describe('Squid Monitor', () => {
       list: jest.fn().mockResolvedValue([]),
       downgrade: jest.fn(),
       promote: jest.fn(),
-      isLive: jest.fn().mockResolvedValue({ live: false, schema: null, activeSchema: null })
+      isLive: jest.fn().mockResolvedValue({ live: false, activeSchema: null, liveService: null, services: [] })
     }
 
     // Mock the Slack component

@@ -7,7 +7,7 @@ export async function setupRouter(): Promise<Router<GlobalContext>> {
   const router = new Router<GlobalContext>()
 
   router.get('/list', listSquidsHandler)
-  router.get('/:id/is-live', isLiveSquidHandler)
+  router.get('/:project/:slot/is-live', isLiveSquidHandler)
   router.put('/:id/promote', promoteSquidHandler)
   router.put('/:id/stop', stopSquidHandler)
 

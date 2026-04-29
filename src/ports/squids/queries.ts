@@ -113,3 +113,33 @@ export const getActiveSchemaQuery = (serviceName: string): SQLStatement => {
       WHERE name = ${projectName};
   `
 }
+
+/**
+ * For a given project, returns the canonical promoted schema (squids.schema).
+ * Same as getActiveSchemaQuery but parameterized by project name directly.
+ */
+export const getActiveSchemaByProjectQuery = (project: string): SQLStatement => {
+  return SQL`
+      SELECT schema
+      FROM public.squids
+      WHERE name = ${project};
+  `
+}
+
+/**
+ * For a given project + slot (a/b), returns the latest indexers row per service
+ * matching the prefix `<project>-squid-server-<slot>-`. Each row is one ECS service
+ * currently associated with that slot (blue/green can have multiple side-by-side).
+ *
+ * The slot is interpolated into a LIKE pattern, so we restrict it to a safe charset
+ * upstream in the component.
+ */
+export const getLatestSlotServicesQuery = (project: string, slot: string): SQLStatement => {
+  const prefix = `${project}-squid-server-${slot}-`
+  return SQL`
+      SELECT DISTINCT ON (service) service, schema
+      FROM public.indexers
+      WHERE service LIKE ${prefix + '%'}
+      ORDER BY service, created_at DESC;
+  `
+}
