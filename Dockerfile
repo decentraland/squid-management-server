@@ -1,6 +1,6 @@
 ARG RUN
 
-FROM node:22-alpine AS builderenv
+FROM node:24-alpine AS builderenv
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ RUN npm prune --omit=dev
 
 ########################## END OF BUILD STAGE ##########################
 
-FROM node:22-alpine
+FROM node:24-alpine
 
 RUN apk add --no-cache tini
 
