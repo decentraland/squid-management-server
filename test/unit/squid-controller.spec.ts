@@ -20,7 +20,10 @@ describe('createSubsquidComponent', () => {
     fetchMock = { fetch: jest.fn() }
     dappsDatabaseMock = { query: jest.fn() } as unknown as IPgComponent
     creditsDatabaseMock = { query: jest.fn() } as unknown as IPgComponent
-    configMock = { requireString: jest.fn().mockResolvedValue('test-cluster') } as unknown as IConfigComponent
+    configMock = {
+      requireString: jest.fn().mockResolvedValue('test-cluster'),
+      getNumber: jest.fn().mockResolvedValue(undefined)
+    } as unknown as IConfigComponent
     logsMock = {
       getLogger: jest.fn().mockReturnValue({
         info: jest.fn(),
@@ -87,6 +90,51 @@ describe('createSubsquidComponent', () => {
       expect(result[0].project_active_schema).toBe('active-schema')
       expect(result[0].metrics?.ETHEREUM?.sqd_processor_last_block).toBe(1000)
       expect(result[0].metrics?.ETHEREUM?.sqd_processor_sync_eta_seconds).toBe(120)
+    })
+
+    describe('and the metrics expose both the last block and the chain height', () => {
+      beforeEach(() => {
+        ;(fetchMock.fetch as jest.Mock).mockResolvedValue({
+          text: jest.fn().mockResolvedValue(`
+            sqd_processor_last_block 500
+            sqd_processor_chain_height 1000
+            sqd_processor_sync_eta_seconds 120
+          `)
+        })
+      })
+
+      it('should include the derived sync progress in the metrics', async () => {
+        const subsquid = await createSubsquidComponent({
+          fetch: fetchMock,
+          dappsDatabase: dappsDatabaseMock,
+          creditsDatabase: creditsDatabaseMock,
+          config: configMock,
+          logs: logsMock
+        })
+
+        const result = await subsquid.list()
+
+        expect(result[0].metrics?.ETHEREUM?.progress).toBe(50)
+      })
+    })
+
+    describe('and list is called more than once within the cache window', () => {
+      it('should reuse the cached topology and not hit the ECS API again', async () => {
+        const subsquid = await createSubsquidComponent({
+          fetch: fetchMock,
+          dappsDatabase: dappsDatabaseMock,
+          creditsDatabase: creditsDatabaseMock,
+          config: configMock,
+          logs: logsMock
+        })
+
+        await subsquid.list()
+        const ecsCallsAfterFirstList = (ecsClientMock.send as jest.Mock).mock.calls.length
+
+        await subsquid.list()
+
+        expect((ecsClientMock.send as jest.Mock).mock.calls.length).toBe(ecsCallsAfterFirstList)
+      })
     })
   })
 
@@ -266,6 +314,114 @@ describe('createSubsquidComponent', () => {
 
       // eslint-disable-next-line @typescript-eslint/unbound-method
       expect(ecsClientMock.send).toHaveBeenCalledWith(expect.any(UpdateServiceCommand))
+    })
+  })
+
+  describe('topology cache invalidation', () => {
+    let services: { serviceName: string }[]
+    let tasks: unknown[]
+
+    beforeEach(() => {
+      services = [{ serviceName: 'test-squid-service' }]
+      tasks = [
+        {
+          version: 1,
+          createdAt: new Date(),
+          healthStatus: 'HEALTHY',
+          lastStatus: 'RUNNING',
+          attachments: [
+            {
+              type: 'ElasticNetworkInterface',
+              details: [{ name: 'privateIPv4Address', value: '127.0.0.1' }]
+            }
+          ]
+        }
+      ]
+      ;(fetchMock.fetch as jest.Mock).mockResolvedValue({
+        text: jest.fn().mockResolvedValue('sqd_processor_last_block 1000')
+      })
+      ;(dappsDatabaseMock.query as jest.Mock).mockResolvedValue({ rows: [{ schema: 'test-schema' }] })
+    })
+
+    describe('when a squid is downgraded after the topology was cached', () => {
+      beforeEach(() => {
+        ;(ecsClientMock.send as jest.Mock)
+          .mockResolvedValueOnce({ serviceArns: ['arn:aws:squid-service'] }) // list #1 - ListServices
+          .mockResolvedValueOnce({ services }) // list #1 - DescribeServices
+          .mockResolvedValueOnce({ taskArns: ['arn:aws:ecs:task/test'] }) // list #1 - ListTasks
+          .mockResolvedValueOnce({ tasks }) // list #1 - DescribeTasks
+          .mockResolvedValueOnce({}) // downgrade - UpdateService
+          .mockResolvedValueOnce({ serviceArns: ['arn:aws:squid-service'] }) // list #2 - ListServices
+          .mockResolvedValueOnce({ services }) // list #2 - DescribeServices
+          .mockResolvedValueOnce({ taskArns: ['arn:aws:ecs:task/test'] }) // list #2 - ListTasks
+          .mockResolvedValueOnce({ tasks }) // list #2 - DescribeTasks
+      })
+
+      it('should re-discover the topology on the next list call', async () => {
+        const subsquid = await createSubsquidComponent({
+          fetch: fetchMock,
+          dappsDatabase: dappsDatabaseMock,
+          creditsDatabase: creditsDatabaseMock,
+          config: configMock,
+          logs: logsMock
+        })
+
+        await subsquid.list()
+        await subsquid.downgrade('test-squid-service')
+        await subsquid.list()
+
+        // 4 (first discovery) + 1 (downgrade) + 4 (re-discovery) = 9 ECS calls
+        expect((ecsClientMock.send as jest.Mock).mock.calls.length).toBe(9)
+      })
+    })
+
+    describe('when the cache is invalidated while a discovery is still in flight', () => {
+      let resolveHeldDescribe: (value: unknown) => void
+
+      beforeEach(() => {
+        ;(getPromoteQuery as jest.Mock).mockReturnValue('PROMOTE QUERY')
+        ;(ecsClientMock.send as jest.Mock)
+          .mockResolvedValueOnce({ serviceArns: ['arn:aws:squid-service'] }) // list #1 - ListServices
+          .mockImplementationOnce(
+            () =>
+              new Promise(resolve => {
+                resolveHeldDescribe = resolve
+              })
+          ) // list #1 - DescribeServices (held in flight)
+          .mockResolvedValueOnce({ taskArns: ['arn:aws:ecs:task/test'] }) // list #1 - ListTasks
+          .mockResolvedValueOnce({ tasks }) // list #1 - DescribeTasks
+          .mockResolvedValueOnce({ serviceArns: ['arn:aws:squid-service'] }) // list #2 - ListServices
+          .mockResolvedValueOnce({ services }) // list #2 - DescribeServices
+          .mockResolvedValueOnce({ taskArns: ['arn:aws:ecs:task/test'] }) // list #2 - ListTasks
+          .mockResolvedValueOnce({ tasks }) // list #2 - DescribeTasks
+      })
+
+      it('should not resurrect the stale topology and re-discover on the next list', async () => {
+        const subsquid = await createSubsquidComponent({
+          fetch: fetchMock,
+          dappsDatabase: dappsDatabaseMock,
+          creditsDatabase: creditsDatabaseMock,
+          config: configMock,
+          logs: logsMock
+        })
+
+        // Start a discovery that parks on the held DescribeServices call.
+        const firstList = subsquid.list()
+        await new Promise(resolve => setImmediate(resolve))
+
+        // Invalidate the cache (promote performs no ECS calls) while the discovery is in flight.
+        await subsquid.promote('test-squid-service')
+
+        // Let the in-flight discovery finish; its result must NOT be written back to the cache.
+        resolveHeldDescribe({ services })
+        await firstList
+
+        // The next list must re-discover instead of serving the stale in-flight result.
+        await subsquid.list()
+
+        // list #1 (4) + list #2 re-discovery (4) = 8 ECS calls; promote adds none.
+        expect((ecsClientMock.send as jest.Mock).mock.calls.length).toBe(8)
+      })
     })
   })
 })

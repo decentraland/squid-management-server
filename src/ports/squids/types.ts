@@ -6,6 +6,8 @@ export type SquidMetric = {
   sqd_processor_chain_height: number
   sqd_processor_last_block: number
   sqd_processor_mapping_blocks_per_second: number
+  // Derived field (not scraped): percentage of the chain indexed, in the [0, 100] range.
+  progress: number
 }
 
 export type Squid = {
@@ -19,6 +21,25 @@ export type Squid = {
   version: number
   image_uri?: string
   metrics: Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
+}
+
+/**
+ * The "slow-moving" description of a squid service: everything that comes from ECS
+ * and the indexers/squids tables. It deliberately excludes the live processor
+ * metrics, which are scraped fresh on every request. This is what the component
+ * caches so that frequent polling does not hammer the ECS API.
+ */
+export type SquidServiceTopology = {
+  service_name: string
+  schema_name?: string
+  project_active_schema?: string
+  version: number
+  created_at?: Date
+  health_status?: HealthStatus
+  service_status?: string
+  image_uri?: string
+  ip?: string
+  networks: { name: Network.ETHEREUM | Network.MATIC; port: number }[]
 }
 
 export type SlotService = {

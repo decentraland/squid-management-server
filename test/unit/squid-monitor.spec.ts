@@ -73,13 +73,15 @@ describe('Squid Monitor', () => {
             sqd_processor_sync_eta_seconds: null as unknown as number,
             sqd_processor_last_block: 1000,
             sqd_processor_chain_height: 1010,
-            sqd_processor_mapping_blocks_per_second: 5
+            sqd_processor_mapping_blocks_per_second: 5,
+            progress: 99.01
           },
           [Network.MATIC]: {
             sqd_processor_sync_eta_seconds: undefined as unknown as number,
             sqd_processor_last_block: 2000,
             sqd_processor_chain_height: 2010,
-            sqd_processor_mapping_blocks_per_second: 7
+            sqd_processor_mapping_blocks_per_second: 7,
+            progress: 99.5
           }
         }
       },
@@ -111,13 +113,15 @@ describe('Squid Monitor', () => {
             sqd_processor_sync_eta_seconds: ETA_CONSIDERED_OUT_OF_SYNC + 5,
             sqd_processor_last_block: 1000,
             sqd_processor_chain_height: 1020,
-            sqd_processor_mapping_blocks_per_second: 8
+            sqd_processor_mapping_blocks_per_second: 8,
+            progress: 98.04
           },
           [Network.MATIC]: {
             sqd_processor_sync_eta_seconds: 5,
             sqd_processor_last_block: 2000,
             sqd_processor_chain_height: 2005,
-            sqd_processor_mapping_blocks_per_second: 12
+            sqd_processor_mapping_blocks_per_second: 12,
+            progress: 99.75
           }
         }
       },
@@ -135,13 +139,15 @@ describe('Squid Monitor', () => {
             sqd_processor_sync_eta_seconds: 5,
             sqd_processor_last_block: 1000,
             sqd_processor_chain_height: 1005,
-            sqd_processor_mapping_blocks_per_second: 10
+            sqd_processor_mapping_blocks_per_second: 10,
+            progress: 99.5
           },
           [Network.MATIC]: {
             sqd_processor_sync_eta_seconds: 3,
             sqd_processor_last_block: 2000,
             sqd_processor_chain_height: 2002,
-            sqd_processor_mapping_blocks_per_second: 15
+            sqd_processor_mapping_blocks_per_second: 15,
+            progress: 99.9
           }
         }
       }
