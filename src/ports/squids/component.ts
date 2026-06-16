@@ -17,10 +17,11 @@ import {
   getPromoteQuery,
   getSchemaByServiceNameQuery
 } from './queries'
-import { ISquidComponent, IsLiveResult, Squid, SquidMetric } from './types'
-import { getMetricValue, getProjectNameFromService, getSquidsNetworksMapping } from './utils'
+import { ISquidComponent, IsLiveResult, Squid, SquidMetric, SquidServiceTopology } from './types'
+import { computeSyncProgress, getMetricValue, getProjectNameFromService, getSquidsNetworksMapping } from './utils'
 
 const AWS_REGION = 'us-east-1'
+const DEFAULT_TOPOLOGY_CACHE_TTL_MS = 30 * 1000
 
 export async function createSubsquidComponent({
   fetch,
@@ -39,6 +40,16 @@ export async function createSubsquidComponent({
   const cluster = await config.requireString('AWS_CLUSTER_NAME')
   const client = new ECSClient({ region: AWS_REGION })
 
+  // Topology (ECS + schema info) changes rarely, so it is cached to keep frequent
+  // polling cheap. The live processor metrics are always scraped fresh on top of it.
+  const topologyCacheTtl = (await config.getNumber('SQUID_TOPOLOGY_CACHE_TTL_MS')) ?? DEFAULT_TOPOLOGY_CACHE_TTL_MS
+  let cachedTopology: SquidServiceTopology[] | null = null
+  let topologyExpiresAt = 0
+  let inFlightTopology: Promise<SquidServiceTopology[]> | null = null
+  // Bumped on every invalidation so an in-flight discovery started before the
+  // invalidation cannot write its (now stale) result back into the cache.
+  let topologyGeneration = 0
+
   function getDatabaseFromServiceName(serviceName: string): IPgComponent {
     if (serviceName.includes('credits-squid-server')) {
       return creditsDatabase
@@ -46,129 +57,221 @@ export async function createSubsquidComponent({
     return dappsDatabase
   }
 
+  /**
+   * Discovers the squid topology from ECS and the indexers/squids tables. This is
+   * the expensive part (several ECS API calls per service) and excludes the live
+   * processor metrics, which are scraped separately.
+   *
+   * Flow:
+   * 1. List all services in the cluster and keep the squid ones.
+   * 2. Describe those services to get their tasks.
+   * 3. For each service, resolve its writing schema and the project's active schema,
+   *    and read task details (version, status, image, private IP).
+   */
+  async function discoverTopology(): Promise<SquidServiceTopology[]> {
+    // Step 1: List all services
+    const input: ListServicesRequest = {
+      cluster,
+      maxResults: 100
+    }
+    const listServicesCommand = new ListServicesCommand(input)
+    const servicesResponse = await client.send(listServicesCommand)
+
+    const serviceArns = servicesResponse.serviceArns || []
+    const squidServices = serviceArns.filter(arn => arn.includes('-squid-server'))
+
+    // Step 2: Describe services in parallel
+    const describeServicesCommand = new DescribeServicesCommand({
+      cluster,
+      services: squidServices
+    })
+
+    const describeServicesResponse = await client.send(describeServicesCommand)
+    const services = describeServicesResponse.services || []
+
+    // Process all services in parallel
+    return Promise.all(
+      services.map(async squidService => {
+        const serviceName = squidService.serviceName || ''
+        const listTasksCommand = new ListTasksCommand({
+          cluster,
+          serviceName
+        })
+        const taskResponse = await client.send(listTasksCommand)
+        const taskArns = taskResponse.taskArns || []
+
+        const database = getDatabaseFromServiceName(serviceName)
+        const schemaName = (await database.query(getSchemaByServiceNameQuery(serviceName))).rows[0]?.schema
+        const projectActiveSchema = (await database.query(getActiveSchemaQuery(serviceName))).rows[0]?.schema
+
+        const topology: SquidServiceTopology = {
+          service_name: serviceName,
+          schema_name: schemaName,
+          project_active_schema: projectActiveSchema,
+          version: 0,
+          networks: getSquidsNetworksMapping(serviceName)
+        }
+
+        if (taskArns.length === 0) {
+          return topology
+        }
+
+        // Step 3: Describe tasks to get container information
+        const describeTasksCommand = new DescribeTasksCommand({
+          cluster,
+          tasks: taskArns
+        })
+        const describeResponse = await client.send(describeTasksCommand)
+        const tasks = describeResponse.tasks || []
+
+        // there should be just one task per service
+        for (const task of tasks) {
+          topology.version = task.version || 0
+          topology.created_at = task.createdAt
+          topology.health_status = task.healthStatus
+          topology.service_status = task.lastStatus
+
+          // Extract image URI from the task definition containers
+          // Look for the main container (usually the first one or the one with squid in the name)
+          const mainContainer = task.containers?.find(container => container.name?.includes('squid')) || task.containers?.[0]
+
+          if (mainContainer?.image) {
+            topology.image_uri = mainContainer.image
+          }
+
+          const ElasticNetworkInterface = 'ElasticNetworkInterface'
+          const privateIPv4Address = 'privateIPv4Address'
+
+          const ip = task.attachments
+            ?.find(att => att.type === ElasticNetworkInterface)
+            ?.details?.find(detail => detail.name === privateIPv4Address)?.value
+
+          if (ip) {
+            topology.ip = ip
+          }
+        }
+
+        return topology
+      })
+    )
+  }
+
+  /**
+   * Returns the squid topology, served from an in-memory cache with a TTL so that
+   * frequent polling does not hammer the ECS API. Concurrent calls during a cache
+   * miss share a single discovery (single-flight). On a discovery error the stale
+   * cache is served when available and the expiry is not extended, so the next call
+   * retries.
+   */
+  async function getTopology(): Promise<SquidServiceTopology[]> {
+    const now = Date.now()
+    if (cachedTopology && now < topologyExpiresAt) {
+      return cachedTopology
+    }
+
+    if (!inFlightTopology) {
+      const generation = topologyGeneration
+      inFlightTopology = discoverTopology()
+        .then(topology => {
+          // Only write back if no invalidation happened while we were discovering,
+          // otherwise we would resurrect a stale topology with a fresh TTL.
+          if (generation === topologyGeneration) {
+            cachedTopology = topology
+            topologyExpiresAt = Date.now() + topologyCacheTtl
+          }
+          return topology
+        })
+        .catch(error => {
+          logger.error('Error discovering squid topology:', { error: String(error) })
+          return cachedTopology ?? []
+        })
+        .finally(() => {
+          if (generation === topologyGeneration) {
+            inFlightTopology = null
+          }
+        })
+    }
+
+    return inFlightTopology
+  }
+
+  // Forces the next list() to re-discover the topology. Called after operations
+  // that change it (promote/downgrade) so the UI reflects them immediately. Bumping
+  // the generation also discards any discovery currently in flight.
+  function invalidateTopologyCache(): void {
+    cachedTopology = null
+    topologyExpiresAt = 0
+    topologyGeneration++
+    inFlightTopology = null
+  }
+
+  /**
+   * Scrapes the live processor metrics for every network of a squid service and
+   * enriches each one with the derived sync progress. Returns an empty record when
+   * the service has no known IP (e.g. it is stopped).
+   */
+  async function scrapeMetrics(topology: SquidServiceTopology): Promise<Record<Network.ETHEREUM | Network.MATIC, SquidMetric>> {
+    const metrics = {} as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
+    if (!topology.ip) {
+      return metrics
+    }
+
+    const metricsResults = await Promise.allSettled(
+      topology.networks.map(async network => {
+        const response = await fetch.fetch(`http://${topology.ip}:${network.port}/metrics`)
+        const text = await response.text()
+        const lastBlock = getMetricValue(text, 'sqd_processor_last_block')
+        const chainHeight = getMetricValue(text, 'sqd_processor_chain_height')
+
+        return {
+          networkName: network.name,
+          metrics: {
+            sqd_processor_sync_eta_seconds: getMetricValue(text, 'sqd_processor_sync_eta_seconds'),
+            sqd_processor_mapping_blocks_per_second: getMetricValue(text, 'sqd_processor_mapping_blocks_per_second'),
+            sqd_processor_last_block: lastBlock,
+            sqd_processor_chain_height: chainHeight,
+            progress: computeSyncProgress(lastBlock, chainHeight)
+          }
+        }
+      })
+    )
+
+    metricsResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        metrics[result.value.networkName] = result.value.metrics
+      } else {
+        logger.error(`Failed to fetch metrics for network ${topology.networks[index].name}:`, result.reason)
+      }
+    })
+
+    return metrics
+  }
+
   async function list(): Promise<Squid[]> {
     try {
-      // Step 1: List all services
-      const input: ListServicesRequest = {
-        cluster,
-        maxResults: 100
-      }
-      const listServicesCommand = new ListServicesCommand(input)
-      const servicesResponse = await client.send(listServicesCommand)
+      const topology = await getTopology()
 
-      const serviceArns = servicesResponse.serviceArns || []
-      const squidServices = serviceArns.filter(arn => arn.includes('-squid-server'))
-
-      // Step 2: Describe services in parallel
-      const describeServicesCommand = new DescribeServicesCommand({
-        cluster,
-        services: squidServices
-      })
-
-      const describeServicesResponse = await client.send(describeServicesCommand)
-      const services = describeServicesResponse.services || []
-
-      // Process all services in parallel
+      // Scrape the live metrics for every service on top of the cached topology.
       const results = await Promise.all(
-        services.map(async squidService => {
-          const serviceName = squidService.serviceName || ''
-          const listTasksCommand = new ListTasksCommand({
-            cluster,
-            serviceName
-          })
-          const taskResponse = await client.send(listTasksCommand)
-          const taskArns = taskResponse.taskArns || []
-
-          const database = getDatabaseFromServiceName(serviceName)
-          const schemaName = (await database.query(getSchemaByServiceNameQuery(serviceName))).rows[0]?.schema
-          const projectActiveSchema = (await database.query(getActiveSchemaQuery(serviceName))).rows[0]?.schema
+        topology.map(async service => {
+          const metrics = await scrapeMetrics(service)
 
           const squid: Partial<Squid> = {
-            name: serviceName,
-            service_name: serviceName,
-            schema_name: schemaName,
-            project_active_schema: projectActiveSchema,
-            metrics: {} as Record<Network.ETHEREUM | Network.MATIC, SquidMetric>
-          }
-
-          if (taskArns.length === 0) {
-            return squid
-          }
-
-          // Step 3: Describe tasks to get container information
-          const describeTasksCommand = new DescribeTasksCommand({
-            cluster,
-            tasks: taskArns
-          })
-          const describeResponse = await client.send(describeTasksCommand)
-          const tasks = describeResponse.tasks || []
-
-          // there should be just one task per service
-          for (const task of tasks) {
-            squid.version = task.version || 0
-            squid.created_at = task.createdAt
-            squid.health_status = task.healthStatus
-            squid.service_status = task.lastStatus
-
-            // Extract image URI from the task definition containers
-            // Look for the main container (usually the first one or the one with squid in the name)
-            const mainContainer = task.containers?.find(container => container.name?.includes('squid')) || task.containers?.[0]
-
-            if (mainContainer?.image) {
-              squid.image_uri = mainContainer.image
-            }
-
-            const ElasticNetworkInterface = 'ElasticNetworkInterface'
-            const privateIPv4Address = 'privateIPv4Address'
-
-            const ip = task.attachments
-              ?.find(att => att.type === ElasticNetworkInterface)
-              ?.details?.find(detail => detail.name === privateIPv4Address)?.value
-
-            if (!ip) continue
-
-            // Fetch metrics for each network in parallel
-            try {
-              const metricsResults = await Promise.allSettled(
-                getSquidsNetworksMapping(serviceName).map(async network => {
-                  const response = await fetch.fetch(`http://${ip}:${network.port}/metrics`)
-                  const text = await response.text()
-
-                  return {
-                    networkName: network.name,
-                    metrics: {
-                      sqd_processor_sync_eta_seconds: getMetricValue(text, 'sqd_processor_sync_eta_seconds'),
-                      sqd_processor_mapping_blocks_per_second: getMetricValue(text, 'sqd_processor_mapping_blocks_per_second'),
-                      sqd_processor_last_block: getMetricValue(text, 'sqd_processor_last_block'),
-                      sqd_processor_chain_height: getMetricValue(text, 'sqd_processor_chain_height')
-                    }
-                  }
-                })
-              )
-
-              // Process successful metric fetches
-              metricsResults.forEach((result, index) => {
-                if (result.status === 'fulfilled') {
-                  const { networkName, metrics } = result.value
-                  if (!squid.metrics) {
-                    squid.metrics = {
-                      [Network.ETHEREUM]: {} as SquidMetric,
-                      [Network.MATIC]: {} as SquidMetric
-                    }
-                  }
-                  squid.metrics[networkName] = metrics
-                } else {
-                  logger.error(`Failed to fetch metrics for network ${getSquidsNetworksMapping(serviceName)[index].name}:`, result.reason)
-                }
-              })
-            } catch (error) {
-              logger.error(`Failed to fetch metrics for ${ip}:`, { error: String(error) })
-            }
+            name: service.service_name,
+            service_name: service.service_name,
+            schema_name: service.schema_name,
+            project_active_schema: service.project_active_schema,
+            version: service.version,
+            created_at: service.created_at,
+            health_status: service.health_status,
+            service_status: service.service_status,
+            image_uri: service.image_uri,
+            metrics
           }
 
           // Only include complete squid objects
           if (squid.created_at && squid.health_status && squid.service_status) {
-            return squid
+            return squid as Squid
           } else {
             logger.warn(`Skipping incomplete squid: ${squid.service_name}`)
             return null
@@ -192,6 +295,7 @@ export async function createSubsquidComponent({
         desiredCount: 0
       })
       await client.send(updateServiceCommand)
+      invalidateTopologyCache()
       logger.info(`Service ${serviceName} stopped!`)
     } catch (error) {
       logger.error('Error stopping service:', { error: String(error), service: serviceName })
@@ -205,6 +309,9 @@ export async function createSubsquidComponent({
 
     const database = getDatabaseFromServiceName(serviceName)
     await database.query(promoteQuery)
+
+    // The promotion changes the active schema, so drop the cached topology to surface it immediately.
+    invalidateTopologyCache()
 
     logger.info(`The ${serviceName} was promoted and the active schema is ${schemaName}`)
 

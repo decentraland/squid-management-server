@@ -13,6 +13,34 @@ The server includes a daemon that monitors active squids every minute. This daem
 
 In either case, the daemon sends an alert through Slack with detailed information about the affected squid.
 
+### Sync progress
+
+The `GET /list` endpoint returns, for every squid and network, a `metrics` object with the live
+processor values scraped from each indexer. On top of the raw values it now includes a derived
+`progress` field: the percentage of the chain that has been indexed, computed as
+`sqd_processor_last_block / sqd_processor_chain_height` and clamped to the `[0, 100]` range. It is
+`0` when the chain height is unknown. This lets clients render an indexing progress bar without
+re-deriving the value.
+
+### Topology caching (frequent polling)
+
+The expensive part of `GET /list` is discovering the squid topology from ECS (listing/describing
+services and tasks) and resolving each schema from the database. That topology changes rarely, so it
+is cached in memory while the live processor metrics are always scraped fresh on every request. This
+makes the endpoint cheap to poll every few seconds (e.g. to drive a live UI) without hammering the
+ECS API. The cache is invalidated automatically after a `promote` or `stop`, so those changes are
+reflected immediately.
+
+The cache TTL is configurable:
+
+```
+SQUID_TOPOLOGY_CACHE_TTL_MS=30000
+```
+
+- `SQUID_TOPOLOGY_CACHE_TTL_MS`: how long (in milliseconds) the topology is cached before being
+  re-discovered. Defaults to `30000`. Lower it to react faster to deploys; raise it to further
+  reduce ECS load under frequent polling.
+
 ## Configuration
 
 To enable Slack alerts, you need to configure the following environment variables:
