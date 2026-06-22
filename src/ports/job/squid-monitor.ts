@@ -1,10 +1,12 @@
 import { Network } from '@dcl/schemas'
 import { AppComponents } from '../../types'
 import { Squid } from '../squids/types'
+import { AVERAGE_BLOCK_TIME_SECONDS, formatDuration, getBlocksBehind } from '../squids/utils'
 import { MOCK_SQUIDS } from './mocks'
 
 export const ETA_CONSIDERED_OUT_OF_SYNC = 100
 export const FIVE_MINUTES = 5 * 60 * 1000
+export const TEN_MINUTES = 10 * 60 * 1000
 
 export type SlackMessageBlock = {
   type: 'section' | 'header' | 'divider' | 'context'
@@ -38,9 +40,31 @@ type SquidAlertMessage = {
 // State to track when "no metrics" issues were first detected for throttling alerts
 export const noMetricsFirstDetected = new Map<string, number>()
 
+// State to track when the last "out of sync" alert was sent, to throttle them
+export const desyncAlertLastSent = new Map<string, number>()
+
 // Helper function to clear throttle state (mainly for testing)
 export function clearNoMetricsThrottleState(): void {
   noMetricsFirstDetected.clear()
+}
+
+// Helper function to clear desync throttle state (mainly for testing)
+export function clearDesyncThrottleState(): void {
+  desyncAlertLastSent.clear()
+}
+
+// Removes throttle entries for squids that are no longer active (e.g. after a
+// blue/green deploy changes the service name), so the throttle maps don't grow
+// unbounded over time.
+export function pruneThrottleState(activeServiceNames: string[]): void {
+  const isActive = (key: string): boolean => activeServiceNames.some(service => key.startsWith(`${service}-`))
+  for (const map of [noMetricsFirstDetected, desyncAlertLastSent]) {
+    for (const key of Array.from(map.keys())) {
+      if (!isActive(key)) {
+        map.delete(key)
+      }
+    }
+  }
 }
 
 export async function createSquidMonitor(
@@ -71,6 +95,9 @@ export async function createSquidMonitor(
       for (const squid of activeSquids) {
         await checkSquidSynchronization(squid)
       }
+
+      // Drop throttle state for squids that are no longer active so the maps stay bounded.
+      pruneThrottleState(activeSquids.map(squid => squid.service_name))
     } catch (error) {
       logger.error('❌ Error monitoring squids:', { error: formatError(error) })
 
@@ -285,7 +312,21 @@ export async function createSquidMonitor(
 
       // Check if ETA is greater than 100 seconds
       if (metrics.sqd_processor_sync_eta_seconds > ETA_CONSIDERED_OUT_OF_SYNC) {
+        const desyncKey = `${squid.service_name}-${network}-desync`
+        const now = Date.now()
+        const lastSent = desyncAlertLastSent.get(desyncKey)
+
+        // Throttle: (re)send the out-of-sync alert at most once every 10 minutes.
+        if (lastSent && now - lastSent < TEN_MINUTES) {
+          continue
+        }
+
         const squidDetailsUrl = `${BASE_URL}?squid=${squid.service_name}&network=${network}`
+
+        // How far behind the chain tip the indexer is, in blocks and approximate wall-clock time.
+        const blocksBehind = getBlocksBehind(metrics.sqd_processor_last_block, metrics.sqd_processor_chain_height)
+        const blockTime = AVERAGE_BLOCK_TIME_SECONDS[network as Network.ETHEREUM | Network.MATIC]
+        const behindRealTime = `~${formatDuration(blocksBehind * blockTime)} (≈ ${blockTime}s/block)`
 
         const desyncMessage: SquidAlertMessage = {
           text: `${ENV_PREFIX} ⚠️ ALERT: Squid '${squid.name}' on network ${network} is out of sync`,
@@ -317,15 +358,23 @@ export async function createSquidMonitor(
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*⏱️ Current ETA:* ${metrics.sqd_processor_sync_eta_seconds} seconds`
+                  text: `*⏱️ Sync ETA:* ~${formatDuration(metrics.sqd_processor_sync_eta_seconds)}`
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*📦 Last block:* ${metrics.sqd_processor_last_block}`
+                  text: `*📉 Blocks behind:* ${blocksBehind.toLocaleString('en-US')}`
                 },
                 {
                   type: 'mrkdwn',
-                  text: `*⛓️ Chain height:* ${metrics.sqd_processor_chain_height}`
+                  text: `*🕰️ Behind real-time:* ${behindRealTime}`
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*📦 Last block:* ${metrics.sqd_processor_last_block.toLocaleString('en-US')}`
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*⛓️ Chain height:* ${metrics.sqd_processor_chain_height.toLocaleString('en-US')}`
                 }
               ]
             },
@@ -349,6 +398,14 @@ export async function createSquidMonitor(
         }
 
         await slack.sendMessage({ channel: slackChannel, ...desyncMessage })
+        desyncAlertLastSent.set(desyncKey, now)
+      } else {
+        // Back in sync: clear any throttle state so a future desync alerts immediately.
+        const desyncKey = `${squid.service_name}-${network}-desync`
+        if (desyncAlertLastSent.has(desyncKey)) {
+          desyncAlertLastSent.delete(desyncKey)
+          logger.info(`Squid ${squid.service_name} on ${network} is back in sync. Clearing desync throttle state.`)
+        }
       }
     }
   }
