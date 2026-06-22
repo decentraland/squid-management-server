@@ -5,8 +5,11 @@ import {
   ETA_CONSIDERED_OUT_OF_SYNC,
   FIVE_MINUTES,
   SlackMessageBlock,
+  TEN_MINUTES,
+  clearDesyncThrottleState,
   clearNoMetricsThrottleState,
   createSquidMonitor,
+  desyncAlertLastSent,
   noMetricsFirstDetected
 } from '../../src/ports/job/squid-monitor'
 import { ISquidComponent, Squid, SquidMetric } from '../../src/ports/squids/types'
@@ -23,6 +26,7 @@ describe('Squid Monitor', () => {
   beforeEach(() => {
     // Clear throttle state before each test
     clearNoMetricsThrottleState()
+    clearDesyncThrottleState()
 
     // Mock the logger
     loggerMock = {
@@ -227,16 +231,93 @@ describe('Squid Monitor', () => {
         )
         expect(desyncCall).toBeTruthy()
 
-        // Verify that the message contains the correct information
+        // Verify that the ETA is shown in a human-readable format (105s -> "1m 45s")
         expect(
           desyncCall &&
             desyncCall[0].blocks?.some(
               (block: SlackMessageBlock) =>
                 block.type === 'section' &&
                 block.fields &&
-                block.fields.some(field => field.text.includes('Current ETA') && field.text.includes('5 seconds'))
+                block.fields.some(field => field.text.includes('Sync ETA') && field.text.includes('1m 45s'))
             )
         ).toBeTruthy()
+      })
+
+      it('should include the blocks behind and the approximate time behind real-time', async () => {
+        await monitorSquids()
+
+        const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
+        const desyncCall = calls.find(
+          (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
+            call[0].text && call[0].text.includes('out of sync') && call[0].text.includes('ETHEREUM')
+        )
+        const fields: { text: string }[] = (desyncCall?.[0].blocks ?? []).flatMap((block: SlackMessageBlock) => block.fields ?? [])
+
+        // 1020 - 1000 = 20 blocks behind; on Ethereum (12s/block) that is ~240s = "4m"
+        const hasBlocksBehind = fields.some(field => field.text.includes('Blocks behind') && field.text.includes('* 20'))
+        const hasBehindRealTime = fields.some(field => field.text.includes('Behind real-time') && field.text.includes('~4m'))
+
+        expect(hasBlocksBehind && hasBehindRealTime).toBe(true)
+      })
+    })
+
+    describe('when a squid with throttle state is no longer active', () => {
+      beforeEach(() => {
+        desyncAlertLastSent.set('gone-squid-ETHEREUM-desync', Date.now())
+        noMetricsFirstDetected.set('gone-squid-MATIC-no-metrics', Date.now())
+        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[3]]) // only synchronized-squid is active
+      })
+
+      it('should prune the stale throttle entries for the missing squid', async () => {
+        await monitorSquids()
+
+        expect(desyncAlertLastSent.has('gone-squid-ETHEREUM-desync')).toBe(false)
+        expect(noMetricsFirstDetected.has('gone-squid-MATIC-no-metrics')).toBe(false)
+      })
+    })
+
+    describe('when a squid stays out of sync across consecutive runs', () => {
+      beforeEach(() => {
+        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[2]])
+      })
+
+      it('should not resend the out-of-sync alert within 10 minutes', async () => {
+        await monitorSquids()
+        await monitorSquids()
+
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(slackComponentMock.sendMessage).toHaveBeenCalledTimes(1)
+      })
+
+      describe('and more than 10 minutes have passed since the last alert', () => {
+        beforeEach(() => {
+          desyncAlertLastSent.set('out-of-sync-squid-ETHEREUM-desync', Date.now() - TEN_MINUTES - 1000)
+        })
+
+        it('should resend the out-of-sync alert', async () => {
+          await monitorSquids()
+
+          const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
+          const desyncCall = calls.find(
+            (call: [{ text: string; blocks?: SlackMessageBlock[] }]) =>
+              call[0].text && call[0].text.includes('out of sync') && call[0].text.includes('ETHEREUM')
+          )
+          expect(desyncCall).toBeTruthy()
+        })
+      })
+    })
+
+    describe('when a previously out-of-sync squid is back in sync', () => {
+      beforeEach(() => {
+        squidsMock.list = jest.fn().mockResolvedValue([mockSquids[3]])
+        desyncAlertLastSent.set('synchronized-squid-ETHEREUM-desync', Date.now())
+        desyncAlertLastSent.set('synchronized-squid-MATIC-desync', Date.now())
+      })
+
+      it('should clear the desync throttle state', async () => {
+        await monitorSquids()
+
+        expect(desyncAlertLastSent.size).toBe(0)
       })
     })
 
