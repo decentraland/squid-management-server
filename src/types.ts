@@ -1,11 +1,5 @@
-import type {
-  IBaseComponent,
-  IConfigComponent,
-  IFetchComponent,
-  IHttpServerComponent,
-  ILoggerComponent,
-  IMetricsComponent
-} from '@well-known-components/interfaces'
+import type { IBaseComponent, IConfigComponent, ILoggerComponent, IMetricsComponent } from '@well-known-components/interfaces'
+import type { IFetchComponent, IHttpServerComponent } from '@dcl/core-commons'
 import { IJobComponent } from '@dcl/job-component'
 import { IPgComponent } from '@dcl/pg-component'
 import { ISlackComponent } from '@dcl/slack-component'

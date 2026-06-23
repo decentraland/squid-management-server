@@ -7,7 +7,8 @@ import {
   ListTasksCommand,
   UpdateServiceCommand
 } from '@aws-sdk/client-ecs'
-import { IConfigComponent, IFetchComponent, ILoggerComponent } from '@well-known-components/interfaces'
+import { IConfigComponent, ILoggerComponent } from '@well-known-components/interfaces'
+import { IFetchComponent } from '@dcl/core-commons'
 import { IPgComponent } from '@dcl/pg-component'
 import { Network } from '@dcl/schemas'
 import {

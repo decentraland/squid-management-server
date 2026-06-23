@@ -2,14 +2,14 @@
 // Here we define the test components to be used in the testing environment
 import { createDotEnvConfigComponent } from '@well-known-components/env-config-provider'
 import { createLogComponent } from '@well-known-components/logger'
-import { createLocalFetchCompoment, createRunner } from '@well-known-components/test-helpers'
-import { createTracerComponent } from '@well-known-components/tracer-component'
 import { createServerComponent } from '@dcl/http-server'
 import { createJobComponent } from '@dcl/job-component'
 import { createMetricsComponent } from '@dcl/metrics'
 import { createPgComponent as createBasePgComponent } from '@dcl/pg-component'
 import { createSlackComponent } from '@dcl/slack-component'
+import { createLocalFetchComponent, createRunner } from '@dcl/test-helpers'
 import { createTracedFetcherComponent } from '@dcl/traced-fetch-component'
+import { createTracerComponent } from '@dcl/tracer-component'
 import { metricDeclarations } from '../src/metrics'
 import { createPgComponent } from '../src/ports/db/component'
 import { createSquidMonitor } from '../src/ports/job/squid-monitor'
@@ -81,7 +81,7 @@ async function initComponents(): Promise<TestComponents> {
     config,
     logs,
     server,
-    localFetch: await createLocalFetchCompoment(config),
+    localFetch: await createLocalFetchComponent(config),
     fetch,
     dappsDatabase,
     metrics,
