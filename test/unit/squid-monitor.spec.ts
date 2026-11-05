@@ -554,6 +554,47 @@ describe('Squid Monitor', () => {
         })
       })
 
+      describe('and, after an alert, it moves a few blocks and stalls again within the hour', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          now += FIFTEEN_MINUTES
+          await monitorSquids()
+          candidate.metrics[Network.MATIC] = metric(lastBlock + 10, lastBlock + 27000)
+          await monitorSquids()
+          now += FIFTEEN_MINUTES
+          await monitorSquids()
+        })
+
+        it('should not alert again before the hour is up', () => {
+          expect(stalledAlerts()).toHaveLength(1)
+        })
+      })
+
+      describe('and its chain height is not known yet', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          now += FIFTEEN_MINUTES
+          candidate.metrics[Network.MATIC] = metric(lastBlock, 0)
+          await monitorSquids()
+        })
+
+        it('should keep its progress instead of treating it as caught up', () => {
+          expect(candidateProgress.get('candidate-squid-MATIC-candidate')).toEqual({ block: lastBlock, since: now - FIFTEEN_MINUTES })
+        })
+      })
+
+      describe('and the squids cannot be listed for a run', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          squidsMock.list = jest.fn().mockResolvedValue([])
+          await monitorSquids()
+        })
+
+        it('should keep its progress', () => {
+          expect(candidateProgress.has('candidate-squid-MATIC-candidate')).toBe(true)
+        })
+      })
+
       describe('and its processor keeps moving, as during a reindex', () => {
         beforeEach(async () => {
           for (let run = 0; run < 20; run++) {
@@ -584,12 +625,12 @@ describe('Squid Monitor', () => {
       describe('and it is promoted or removed', () => {
         beforeEach(async () => {
           await monitorSquids()
-          squidsMock.list = jest.fn().mockResolvedValue([])
+          squidsMock.list = jest.fn().mockResolvedValue([{ ...candidate, service_name: 'another-squid' }])
           await monitorSquids()
         })
 
         it('should drop its progress', () => {
-          expect(candidateProgress.size).toBe(0)
+          expect(candidateProgress.has('candidate-squid-MATIC-candidate')).toBe(false)
         })
       })
     })
