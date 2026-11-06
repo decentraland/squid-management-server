@@ -7,6 +7,8 @@ import { MOCK_SQUIDS } from './mocks'
 export const ETA_CONSIDERED_OUT_OF_SYNC = 100
 export const FIVE_MINUTES = 5 * 60 * 1000
 export const TEN_MINUTES = 10 * 60 * 1000
+export const FIFTEEN_MINUTES = 15 * 60 * 1000
+export const ONE_HOUR = 60 * 60 * 1000
 
 export type SlackMessageBlock = {
   type: 'section' | 'header' | 'divider' | 'context'
@@ -42,6 +44,16 @@ export const noMetricsFirstDetected = new Map<string, number>()
 
 // State to track when the last "out of sync" alert was sent, to throttle them
 export const desyncAlertLastSent = new Map<string, number>()
+
+// Where each candidate (not live) slot's processor last moved, per network, and when it was last
+// alerted about. A candidate is behind for hours while it reindexes, so it is never alerted for
+// being out of sync, only for not moving.
+export const candidateProgress = new Map<string, { block: number; since: number; alertedAt?: number }>()
+
+// Helper function to clear candidate progress state (mainly for testing)
+export function clearCandidateProgressState(): void {
+  candidateProgress.clear()
+}
 
 // Helper function to clear throttle state (mainly for testing)
 export function clearNoMetricsThrottleState(): void {
@@ -96,8 +108,18 @@ export async function createSquidMonitor(
         await checkSquidSynchronization(squid)
       }
 
-      // Drop throttle state for squids that are no longer active so the maps stay bounded.
-      pruneThrottleState(activeSquids.map(squid => squid.service_name))
+      // Candidate slots: deployed with an indexer schema, but not the one the project serves.
+      const candidateSquids = allSquids.filter(squid => squid.schema_name && squid.schema_name !== squid.project_active_schema)
+      for (const squid of candidateSquids) {
+        await checkCandidateProgress(squid)
+      }
+
+      // Drop state for squids that are gone so the maps stay bounded. An empty list is what a failed
+      // discovery returns too, so it prunes nothing rather than restarting every timer.
+      if (allSquids.length > 0) {
+        pruneThrottleState(activeSquids.map(squid => squid.service_name))
+        pruneCandidateProgress(candidateSquids.map(squid => squid.service_name))
+      }
     } catch (error) {
       logger.error('❌ Error monitoring squids:', { error: formatError(error) })
 
@@ -410,5 +432,94 @@ export async function createSquidMonitor(
     }
   }
 
+  /**
+   * Alerts when a candidate slot that is behind the chain stops moving for FIFTEEN_MINUTES: a reindex
+   * moves, a stalled processor (one whose portal cannot serve the blocks it needs) does not. Resent at
+   * most once an hour while the stall lasts. A candidate that reports no metrics (no running task, a
+   * failed scrape) is not judged, and keeps the progress it had.
+   */
+  async function checkCandidateProgress(squid: Squid) {
+    const validNetworks = squid.service_name.includes('credits') ? [Network.MATIC] : [Network.ETHEREUM, Network.MATIC]
+    for (const network of validNetworks) {
+      const metrics = squid.metrics[network as Network.ETHEREUM | Network.MATIC]
+      const key = `${squid.service_name}-${network}-candidate`
+      // No chain height yet (a processor just started) says nothing about progress either.
+      if (!metrics || !metrics.sqd_processor_chain_height) continue
+      const blocksBehind = getBlocksBehind(metrics.sqd_processor_last_block, metrics.sqd_processor_chain_height)
+      if (blocksBehind === 0) {
+        candidateProgress.delete(key)
+        continue
+      }
+
+      const now = Date.now()
+      const seen = candidateProgress.get(key)
+      if (!seen || seen.block !== metrics.sqd_processor_last_block) {
+        // A processor that moves a little now and then keeps the hourly limit on its alerts.
+        candidateProgress.set(key, { block: metrics.sqd_processor_last_block, since: now, alertedAt: seen?.alertedAt })
+        continue
+      }
+      if (now - seen.since < FIFTEEN_MINUTES || (seen.alertedAt && now - seen.alertedAt < ONE_HOUR)) continue
+
+      const squidDetailsUrl = `${BASE_URL}?squid=${squid.service_name}&network=${network}`
+      const stalledMessage: SquidAlertMessage = {
+        text: `${ENV_PREFIX} ⚠️ ALERT: Candidate squid '${squid.name}' on network ${network} stopped indexing`,
+        blocks: [
+          {
+            type: 'header',
+            text: {
+              type: 'plain_text',
+              text: `${ENV_PREFIX} ⚠️ ALERT: Candidate squid stalled`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `⏸️ Candidate (not live) squid *${squid.name}* on network *${network}* has not moved for ${formatDuration(
+                Math.round((now - seen.since) / 1000)
+              )} while behind the chain`
+            }
+          },
+          {
+            type: 'section',
+            fields: [
+              { type: 'mrkdwn', text: `*🆔 ID:* ${squid.service_name}` },
+              { type: 'mrkdwn', text: `*📊 Schema:* ${squid.schema_name}` },
+              { type: 'mrkdwn', text: `*📦 Stuck at block:* ${metrics.sqd_processor_last_block.toLocaleString('en-US')}` },
+              { type: 'mrkdwn', text: `*📉 Blocks behind:* ${blocksBehind.toLocaleString('en-US')}` }
+            ]
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*🛠️ Actions:* <${squidDetailsUrl}|View Details>`
+            }
+          },
+          {
+            type: 'context',
+            elements: [
+              {
+                type: 'mrkdwn',
+                text: `*🕒 Date:* ${new Date().toLocaleString()}`
+              }
+            ]
+          }
+        ]
+      }
+      await slack.sendMessage({ channel: slackChannel, ...stalledMessage })
+      candidateProgress.set(key, { ...seen, alertedAt: now })
+    }
+  }
+
   return monitorSquids
+}
+
+// Removes progress entries for candidate slots that are gone or were promoted.
+export function pruneCandidateProgress(candidateServiceNames: string[]): void {
+  for (const key of Array.from(candidateProgress.keys())) {
+    if (!candidateServiceNames.some(service => key.startsWith(`${service}-`))) {
+      candidateProgress.delete(key)
+    }
+  }
 }

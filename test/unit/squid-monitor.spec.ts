@@ -3,9 +3,13 @@ import { Network } from '@dcl/schemas'
 import { ISlackComponent } from '@dcl/slack-component'
 import {
   ETA_CONSIDERED_OUT_OF_SYNC,
+  FIFTEEN_MINUTES,
   FIVE_MINUTES,
+  ONE_HOUR,
   SlackMessageBlock,
   TEN_MINUTES,
+  candidateProgress,
+  clearCandidateProgressState,
   clearDesyncThrottleState,
   clearNoMetricsThrottleState,
   createSquidMonitor,
@@ -27,6 +31,7 @@ describe('Squid Monitor', () => {
     // Clear throttle state before each test
     clearNoMetricsThrottleState()
     clearDesyncThrottleState()
+    clearCandidateProgressState()
 
     // Mock the logger
     loggerMock = {
@@ -465,6 +470,168 @@ describe('Squid Monitor', () => {
         // Verify that recovery was logged
         expect(loggerMock.info).toHaveBeenCalledWith('Metrics recovered for squid-without-metrics on ETHEREUM. Clearing throttle state.')
         expect(loggerMock.info).toHaveBeenCalledWith('Metrics recovered for squid-without-metrics on MATIC. Clearing throttle state.')
+      })
+    })
+    describe('when a candidate slot is behind the chain', () => {
+      let now: number
+      let lastBlock: number
+      let candidate: Squid
+
+      const metric = (last: number, height: number): SquidMetric => ({
+        sqd_processor_sync_eta_seconds: 5000,
+        sqd_processor_last_block: last,
+        sqd_processor_chain_height: height,
+        sqd_processor_mapping_blocks_per_second: 1,
+        progress: 99
+      })
+      const stalledAlerts = () =>
+        (slackComponentMock.sendMessage as jest.Mock).mock.calls.filter((call: [{ text: string }]) =>
+          call[0].text.includes('stopped indexing')
+        )
+
+      beforeEach(() => {
+        now = 1_000_000_000
+        lastBlock = 96705450
+        jest.spyOn(Date, 'now').mockImplementation(() => now)
+        candidate = {
+          name: 'Candidate Squid',
+          service_name: 'candidate-squid',
+          schema_name: 'candidate-schema',
+          project_active_schema: 'active-schema',
+          created_at: undefined,
+          health_status: undefined,
+          service_status: undefined,
+          version: 1,
+          metrics: {
+            [Network.ETHEREUM]: metric(26344247, 26344247),
+            [Network.MATIC]: metric(lastBlock, lastBlock + 27000)
+          }
+        }
+        squidsMock.list = jest.fn().mockImplementation(() => Promise.resolve([candidate]))
+      })
+
+      afterEach(() => {
+        jest.restoreAllMocks()
+      })
+
+      describe('and its processor does not move for fifteen minutes', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          now += FIFTEEN_MINUTES
+          await monitorSquids()
+        })
+
+        it('should send one stalled alert for that network only', () => {
+          expect(stalledAlerts()).toHaveLength(1)
+          expect(stalledAlerts()[0][0].text).toContain('MATIC')
+        })
+
+        it('should not send an out-of-sync alert, since the slot is not live', () => {
+          const calls = (slackComponentMock.sendMessage as jest.Mock).mock.calls
+          expect(calls.some((call: [{ text: string }]) => call[0].text.includes('out of sync'))).toBe(false)
+        })
+
+        describe('and it stays stalled for less than an hour after the alert', () => {
+          beforeEach(async () => {
+            now += ONE_HOUR - 1000
+            await monitorSquids()
+          })
+
+          it('should not resend the stalled alert', () => {
+            expect(stalledAlerts()).toHaveLength(1)
+          })
+        })
+
+        describe('and it stays stalled for an hour after the alert', () => {
+          beforeEach(async () => {
+            now += ONE_HOUR
+            await monitorSquids()
+          })
+
+          it('should resend the stalled alert', () => {
+            expect(stalledAlerts()).toHaveLength(2)
+          })
+        })
+      })
+
+      describe('and, after an alert, it moves a few blocks and stalls again within the hour', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          now += FIFTEEN_MINUTES
+          await monitorSquids()
+          candidate.metrics[Network.MATIC] = metric(lastBlock + 10, lastBlock + 27000)
+          await monitorSquids()
+          now += FIFTEEN_MINUTES
+          await monitorSquids()
+        })
+
+        it('should not alert again before the hour is up', () => {
+          expect(stalledAlerts()).toHaveLength(1)
+        })
+      })
+
+      describe('and its chain height is not known yet', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          now += FIFTEEN_MINUTES
+          candidate.metrics[Network.MATIC] = metric(lastBlock, 0)
+          await monitorSquids()
+        })
+
+        it('should keep its progress instead of treating it as caught up', () => {
+          expect(candidateProgress.get('candidate-squid-MATIC-candidate')).toEqual({ block: lastBlock, since: now - FIFTEEN_MINUTES })
+        })
+      })
+
+      describe('and the squids cannot be listed for a run', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          squidsMock.list = jest.fn().mockResolvedValue([])
+          await monitorSquids()
+        })
+
+        it('should keep its progress', () => {
+          expect(candidateProgress.has('candidate-squid-MATIC-candidate')).toBe(true)
+        })
+      })
+
+      describe('and its processor keeps moving, as during a reindex', () => {
+        beforeEach(async () => {
+          for (let run = 0; run < 20; run++) {
+            await monitorSquids()
+            now += 60 * 1000
+            candidate.metrics[Network.MATIC] = metric(candidate.metrics[Network.MATIC].sqd_processor_last_block + 500, lastBlock + 27000)
+          }
+        })
+
+        it('should not send any alert', () => {
+          // eslint-disable-next-line @typescript-eslint/unbound-method
+          expect(slackComponentMock.sendMessage).not.toHaveBeenCalled()
+        })
+      })
+
+      describe('and it catches up with the chain', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          candidate.metrics[Network.MATIC] = metric(lastBlock + 27000, lastBlock + 27000)
+          await monitorSquids()
+        })
+
+        it('should forget its progress', () => {
+          expect(candidateProgress.has('candidate-squid-MATIC-candidate')).toBe(false)
+        })
+      })
+
+      describe('and it is promoted or removed', () => {
+        beforeEach(async () => {
+          await monitorSquids()
+          squidsMock.list = jest.fn().mockResolvedValue([{ ...candidate, service_name: 'another-squid' }])
+          await monitorSquids()
+        })
+
+        it('should drop its progress', () => {
+          expect(candidateProgress.has('candidate-squid-MATIC-candidate')).toBe(false)
+        })
       })
     })
   })
